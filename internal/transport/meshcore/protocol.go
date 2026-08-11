@@ -185,12 +185,21 @@ func buildSetChannel(slot byte, name string, secret []byte) []byte {
 }
 
 // parseChannelInfo parses RESP_CODE_CHANNEL_INFO (0x12):
-// [0x12][slot][name 32B nul-padded][secret 16B]. The secret is ignored.
+// [0x12][slot][name 32B][secret 16B]. The secret is ignored.
+//
+// Unconfigured slots come back with junk in the name field (erased flash is
+// 0xFF-filled, not NUL-filled), so the name is cut at the first byte that
+// isn't printable ASCII — an empty result means "slot free".
 func parseChannelInfo(f []byte) (slot int, name string, err error) {
 	if len(f) < 34 || f[0] != respChannelInfo {
 		return 0, "", fmt.Errorf("meshcore: bad CHANNEL_INFO frame (%d bytes)", len(f))
 	}
-	return int(f[1]), strings.TrimRight(string(f[2:34]), "\x00"), nil
+	raw := f[2:34]
+	end := 0
+	for end < len(raw) && raw[end] >= 0x20 && raw[end] <= 0x7E {
+		end++
+	}
+	return int(f[1]), strings.TrimSpace(string(raw[:end])), nil
 }
 
 // buildSendSelfAdvert builds CMD_SEND_SELF_ADVERT: [0x07][type] (1 = flood).

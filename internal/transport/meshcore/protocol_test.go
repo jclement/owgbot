@@ -143,6 +143,33 @@ func TestParseContactMsgRoutedPath(t *testing.T) {
 	}
 }
 
+func TestParseChannelInfoSanitizesNames(t *testing.T) {
+	frame := func(slot byte, name []byte) []byte {
+		f := make([]byte, 50)
+		f[0] = respChannelInfo
+		f[1] = slot
+		copy(f[2:34], name)
+		return f
+	}
+	// A real channel: nul-padded printable name.
+	if _, name, err := parseChannelInfo(frame(0, []byte("Public"))); err != nil || name != "Public" {
+		t.Fatalf("got %q, %v", name, err)
+	}
+	// Erased-flash slot: 0xFF fill must read as unconfigured.
+	junk := make([]byte, 32)
+	for i := range junk {
+		junk[i] = 0xFF
+	}
+	if _, name, err := parseChannelInfo(frame(3, junk)); err != nil || name != "" {
+		t.Fatalf("junk name should be empty, got %q, %v", name, err)
+	}
+	// Printable prefix then junk: keep the printable part.
+	mixed := append([]byte("yyc"), 0xFF, 0xFF)
+	if _, name, _ := parseChannelInfo(frame(1, mixed)); name != "yyc" {
+		t.Fatalf("mixed name: %q", name)
+	}
+}
+
 func TestParseSelfInfo(t *testing.T) {
 	f := make([]byte, 58)
 	f[0] = respSelfInfo

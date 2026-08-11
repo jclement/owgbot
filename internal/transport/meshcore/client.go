@@ -243,7 +243,7 @@ func (c *Client) syncChannels(ctx context.Context) {
 	c.mu.Lock()
 	c.channels = fresh
 	c.mu.Unlock()
-	c.log.Debug("channels synced", "count", len(fresh))
+	c.log.Info("channels synced", "channels", fmt.Sprintf("%v", fresh))
 }
 
 func (c *Client) ChannelName(channel int) string {
