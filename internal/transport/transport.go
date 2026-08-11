@@ -33,6 +33,10 @@ type Message struct {
 type SelfInfo struct {
 	PublicKey string // 64 hex chars
 	Name      string
+	// FwVer and Model describe the companion radio firmware (0/"" when
+	// unknown, e.g. on the fake transport).
+	FwVer int
+	Model string
 }
 
 // Transport is a connection to a mesh radio.
@@ -47,6 +51,9 @@ type Transport interface {
 	// Send delivers a direct message to the node with the given public-key
 	// prefix (12 hex chars). Blocks until the radio accepts (or rejects) it.
 	Send(ctx context.Context, to string, text string) error
+	// SendAdvert broadcasts a self-advert so the mesh learns this node
+	// exists (flood = propagate via repeaters).
+	SendAdvert(ctx context.Context, flood bool) error
 	// Self reports the local node's identity (valid after Start).
 	Self() SelfInfo
 	// NodeName returns the advertised name for a node prefix from the

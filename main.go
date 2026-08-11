@@ -319,7 +319,8 @@ func runBot(cfg *config.Provider, tr transport.Transport, ui func(*bot.Bot, cont
 	if key := cfg.Get().Setting("ai", "api_key", os.Getenv("OPENAI_API_KEY")); key != "" {
 		plugins = append(plugins, ai.New(key), zork.New(key))
 	}
-	plugins = append(plugins, admin.New(pluginList, restart))
+	plugins = append(plugins, admin.New(pluginList, restart,
+		func(ctx context.Context) error { return b.SendAdvertNow(ctx) }))
 
 	b, err = bot.New(tr, cfg, st, log, plugins...)
 	if err != nil {

@@ -13,6 +13,7 @@ import (
 
 	"github.com/jclement/owgbot/internal/config"
 	"github.com/jclement/owgbot/internal/store"
+	"github.com/jclement/owgbot/internal/transport"
 )
 
 // Command describes one slash command a plugin owns.
@@ -81,6 +82,8 @@ type Env struct {
 	NodeName func(user string) string
 	// ResolveNode turns a node name or 12-hex prefix into a prefix.
 	ResolveNode func(nameOrPrefix string) (string, bool)
+	// Self reports the radio node the bot is running as.
+	Self func() transport.SelfInfo
 }
 
 // Plugin is one bot feature.

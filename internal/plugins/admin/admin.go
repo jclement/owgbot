@@ -4,6 +4,7 @@
 package admin
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -12,16 +13,18 @@ import (
 	"github.com/jclement/owgbot/internal/version"
 )
 
-// Plugin needs hooks back into the app: the plugin roster for /plugins, and
-// a restart trigger for /update (flush outbound then exit; systemd restarts).
+// Plugin needs hooks back into the app: the plugin roster for /plugins, a
+// restart trigger for /update (flush outbound then exit; systemd restarts),
+// and an advert trigger for /advert.
 type Plugin struct {
 	env     plugin.Env
 	plugins func() []plugin.Plugin
 	restart func()
+	advert  func(ctx context.Context) error
 }
 
-func New(plugins func() []plugin.Plugin, restart func()) *Plugin {
-	return &Plugin{plugins: plugins, restart: restart}
+func New(plugins func() []plugin.Plugin, restart func(), advert func(ctx context.Context) error) *Plugin {
+	return &Plugin{plugins: plugins, restart: restart, advert: advert}
 }
 
 func (p *Plugin) Name() string { return "admin" }
@@ -30,11 +33,19 @@ func (p *Plugin) Commands() []plugin.Command {
 	return []plugin.Command{
 		{Name: "plugins", Help: "list plugins", Admin: true},
 		{Name: "update", Help: "self-update from github", Admin: true},
+		{Name: "advert", Help: "broadcast a self-advert now", Admin: true},
 	}
 }
 
 func (p *Plugin) Init(env plugin.Env) error {
 	p.env = env
+	// If an /update restarted us, tell the admin who ran it that we're back.
+	if user, err := env.KV.Get("", "notify"); err == nil {
+		env.SendTo(user, "update complete — running "+version.Full())
+		if derr := env.KV.Delete("", "notify"); derr != nil {
+			env.Log.Warn("clearing update notify failed", "err", derr)
+		}
+	}
 	return nil
 }
 
@@ -49,6 +60,13 @@ func (p *Plugin) HandleCommand(ctx *plugin.Ctx, cmd, args string) error {
 		return nil
 	case "update":
 		return p.update(ctx)
+	case "advert":
+		if err := p.advert(ctx.Context); err != nil {
+			ctx.Reply("advert failed: " + err.Error())
+			return nil
+		}
+		ctx.Reply("advert sent")
+		return nil
 	}
 	return nil
 }
@@ -72,6 +90,10 @@ func (p *Plugin) update(ctx *plugin.Ctx) error {
 	if err := rel.Apply(); err != nil {
 		ctx.Reply("update failed: " + err.Error())
 		return nil
+	}
+	// Leave a note so the next boot DMs this admin that we're back.
+	if err := p.env.KV.Set("", "notify", ctx.User); err != nil {
+		p.env.Log.Warn("saving update notify failed", "err", err)
 	}
 	p.env.Log.Info("update applied; restarting", "tag", rel.Tag)
 	p.restart()

@@ -6,6 +6,7 @@ package bot
 import (
 	"context"
 	"log/slog"
+	"strconv"
 	"strings"
 	"time"
 
@@ -65,6 +66,7 @@ func New(tr transport.Transport, cfg *config.Provider, st *store.Store, log *slo
 			Config:      cfg.Get,
 			NodeName:    tr.NodeName,
 			ResolveNode: tr.ResolveNode,
+			Self:        tr.Self,
 		}
 		if err := p.Init(env); err != nil {
 			return nil, err
@@ -100,6 +102,7 @@ func (b *Bot) Run(ctx context.Context) error {
 	defer b.cancel()
 
 	go b.sendLoop(ctx)
+	go b.advertLoop(ctx)
 	defer close(b.doneCh)
 	defer b.stopPlugins()
 
@@ -139,6 +142,51 @@ func (b *Bot) stopPlugins() {
 			s.Stop()
 		}
 	}
+}
+
+// advertLoop broadcasts a periodic self-advert so the mesh knows the bot
+// exists. The last-sent time is persisted, so restart loops can't spam.
+func (b *Bot) advertLoop(ctx context.Context) {
+	t := time.NewTicker(time.Minute)
+	defer t.Stop()
+	for {
+		b.maybeAdvert(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+	}
+}
+
+func (b *Bot) maybeAdvert(ctx context.Context) {
+	interval := b.cfg.Get().AdvertEvery()
+	if interval == 0 {
+		return
+	}
+	var last time.Time
+	if v, err := b.sticky.Get("", "last_advert"); err == nil {
+		if ts, perr := strconv.ParseInt(v, 10, 64); perr == nil {
+			last = time.Unix(ts, 0)
+		}
+	}
+	if time.Since(last) < interval {
+		return
+	}
+	if err := b.SendAdvertNow(ctx); err != nil {
+		b.log.Warn("periodic advert failed", "err", err)
+	}
+}
+
+// SendAdvertNow broadcasts a flood self-advert and resets the periodic timer.
+func (b *Bot) SendAdvertNow(ctx context.Context) error {
+	sctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	if err := b.tr.SendAdvert(sctx, true); err != nil {
+		return err
+	}
+	b.log.Info("self-advert sent")
+	return b.sticky.Set("", "last_advert", strconv.FormatInt(time.Now().Unix(), 10))
 }
 
 // sendLoop paces outbound messages so the bot never floods LoRa airtime.

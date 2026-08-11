@@ -23,9 +23,10 @@ type Transport struct {
 	adverts  chan string
 	outbound chan Sent
 
-	mu     sync.Mutex
-	closed bool
-	names  map[string]string // prefix → name
+	mu          sync.Mutex
+	closed      bool
+	names       map[string]string // prefix → name
+	advertsSent int
 }
 
 func New() *Transport {
@@ -47,7 +48,11 @@ func (t *Transport) Send(ctx context.Context, to string, text string) error {
 }
 
 func (t *Transport) Self() transport.SelfInfo {
-	return transport.SelfInfo{PublicKey: "fa4e0000000000000000000000000000", Name: "owgbot-dev"}
+	return transport.SelfInfo{
+		PublicKey: "fa4e0000000000000000000000000000",
+		Name:      "owgbot-dev",
+		Model:     "fake radio",
+	}
 }
 
 func (t *Transport) Close() error {
@@ -61,6 +66,21 @@ func (t *Transport) Close() error {
 }
 
 func (t *Transport) Adverts() <-chan string { return t.adverts }
+
+// SendAdvert records that a self-advert was broadcast (tests).
+func (t *Transport) SendAdvert(ctx context.Context, flood bool) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.advertsSent++
+	return nil
+}
+
+// AdvertsSent reports how many self-adverts the bot has broadcast.
+func (t *Transport) AdvertsSent() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.advertsSent
+}
 
 func (t *Transport) NodeName(prefix string) string {
 	t.mu.Lock()

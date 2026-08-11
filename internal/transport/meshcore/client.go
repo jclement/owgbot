@@ -127,6 +127,18 @@ func (c *Client) Send(ctx context.Context, to string, text string) error {
 	}
 }
 
+// SendAdvert broadcasts CMD_SEND_SELF_ADVERT.
+func (c *Client) SendAdvert(ctx context.Context, flood bool) error {
+	f, err := c.roundTrip(ctx, buildSendSelfAdvert(flood))
+	if err != nil {
+		return err
+	}
+	if f[0] == respErr {
+		return fmt.Errorf("meshcore: advert rejected")
+	}
+	return nil
+}
+
 func (c *Client) Close() error {
 	c.close.Do(func() { close(c.done) })
 	c.mu.Lock()
@@ -154,10 +166,12 @@ func (c *Client) connect(ctx context.Context) error {
 
 	// Declare protocol version 3 first — without this the firmware answers
 	// with V1 message frames, which carry no SNR.
+	var fwVer int
+	var model string
 	if f, err := c.roundTrip(ctx, buildDeviceQuery()); err != nil {
 		c.log.Warn("device query failed; SNR may be unavailable", "err", err)
-	} else if fw, model := parseDeviceInfo(f); fw > 0 {
-		c.log.Info("device", "fw_ver", fw, "model", model)
+	} else if fwVer, model = parseDeviceInfo(f); fwVer > 0 {
+		c.log.Info("device", "fw_ver", fwVer, "model", model)
 	}
 
 	f, err := c.roundTrip(ctx, buildAppStart("owgbot"))
@@ -171,7 +185,12 @@ func (c *Client) connect(ctx context.Context) error {
 		return err
 	}
 	c.mu.Lock()
-	c.self = transport.SelfInfo{PublicKey: hex.EncodeToString(si.publicKey), Name: si.name}
+	c.self = transport.SelfInfo{
+		PublicKey: hex.EncodeToString(si.publicKey),
+		Name:      si.name,
+		FwVer:     fwVer,
+		Model:     model,
+	}
 	c.mu.Unlock()
 	c.log.Info("connected", "node", si.name, "pubkey", hex.EncodeToString(si.publicKey)[:12])
 

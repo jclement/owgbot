@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync/atomic"
+	"time"
 
 	"github.com/fsnotify/fsnotify"
 	"gopkg.in/yaml.v3"
@@ -27,6 +28,10 @@ type Config struct {
 	// SendIntervalMS is the minimum gap between outbound messages (LoRa
 	// airtime is shared — don't flood the mesh).
 	SendIntervalMS int `yaml:"send_interval_ms"`
+
+	// AdvertInterval is how often the bot broadcasts a self-advert so the
+	// mesh knows it exists (Go duration, e.g. "24h"; "0" disables).
+	AdvertInterval string `yaml:"advert_interval"`
 
 	// Admins lists node public-key prefixes (12 hex chars) allowed to run
 	// admin commands.
@@ -67,6 +72,18 @@ func (c *Config) Setting(plugin, key, def string) string {
 	return def
 }
 
+// AdvertEvery returns the periodic-advert interval (0 = disabled).
+func (c *Config) AdvertEvery() time.Duration {
+	if c.AdvertInterval == "" || c.AdvertInterval == "0" {
+		return 0
+	}
+	d, err := time.ParseDuration(c.AdvertInterval)
+	if err != nil || d < 0 {
+		return 0
+	}
+	return d
+}
+
 // IsAdmin reports whether the user (pubkey prefix) is an admin.
 func (c *Config) IsAdmin(user string) bool {
 	for _, a := range c.Admins {
@@ -86,6 +103,7 @@ func Default() Config {
 		DataDir:        "/var/lib/owgbot",
 		MaxMsgLen:      140,
 		SendIntervalMS: 2000,
+		AdvertInterval: "24h",
 		RateLimit:      RateLimit{PerMinute: 6, Burst: 3},
 		GithubRepo:     "jclement/owgbot",
 	}
@@ -139,6 +157,11 @@ func (p *Provider) parseFile(path string) (Config, error) {
 	}
 	if c.MaxMsgLen < 20 || c.MaxMsgLen > 160 {
 		return c, fmt.Errorf("config: max_msg_len must be 20..160 (got %d)", c.MaxMsgLen)
+	}
+	if c.AdvertInterval != "" && c.AdvertInterval != "0" {
+		if _, err := time.ParseDuration(c.AdvertInterval); err != nil {
+			return c, fmt.Errorf("config: bad advert_interval %q (want e.g. \"24h\" or \"0\")", c.AdvertInterval)
+		}
 	}
 	return c, nil
 }

@@ -12,6 +12,10 @@ max_msg_len: 140
 # Minimum gap between outbound messages — LoRa airtime is shared.
 send_interval_ms: 2000
 
+# How often to broadcast a self-advert so the mesh knows the bot exists
+# (Go duration; "0" disables). /advert sends one on demand.
+advert_interval: "24h"
+
 # Node public-key prefixes (12 hex chars) allowed to run admin commands
 # (/update, /plugins). Find yours by DMing the bot and checking the journal:
 #   journalctl -u owgbot | grep message

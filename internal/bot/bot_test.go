@@ -152,6 +152,17 @@ func TestStickySessionRouting(t *testing.T) {
 	}
 }
 
+func TestPeriodicAdvert(t *testing.T) {
+	tr, _ := newTestBot(t) // default config: advert_interval 24h, never sent
+	deadline := time.Now().Add(2 * time.Second)
+	for tr.AdvertsSent() == 0 && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if got := tr.AdvertsSent(); got != 1 {
+		t.Fatalf("expected exactly one startup advert, got %d", got)
+	}
+}
+
 func TestRateLimitNotice(t *testing.T) {
 	c := config.Default()
 	c.DataDir = t.TempDir()
