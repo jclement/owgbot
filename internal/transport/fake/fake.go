@@ -112,12 +112,18 @@ func (t *Transport) SetName(prefix, name string) {
 // Inject delivers an inbound message to the bot as if it arrived over the
 // mesh. SNR is fixed at a plausible dev value.
 func (t *Transport) Inject(from, text string) {
+	t.InjectAt(from, text, time.Now())
+}
+
+// InjectAt injects with an explicit sender timestamp (client retries reuse
+// the original timestamp — needed to test dedup).
+func (t *Transport) InjectAt(from, text string, at time.Time) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.closed {
 		return
 	}
-	t.msgs <- transport.Message{From: from, Text: text, SNR: -2.5, Time: time.Now()}
+	t.msgs <- transport.Message{From: from, Text: text, SNR: -2.5, Time: at}
 }
 
 // InjectAdvert simulates hearing a node advert.

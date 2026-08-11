@@ -5,8 +5,10 @@
 //	/remind del 3           cancel
 //
 // Reminders are stored as JSON rows in the plugin's KV namespace and survive
-// restarts. Delivery is best-effort: the mesh node may be offline, so sends
-// that fail are retried on a backoff for a bounded number of attempts.
+// restarts. A due reminder is sent exactly once — the radio firmware handles
+// link-level retries, and re-sending blindly from here just duplicates the
+// message for the recipient. (True end-to-end delivery tracking would need
+// the PUSH_SEND_CONFIRMED ack; future work.)
 package remind
 
 import (
@@ -22,18 +24,13 @@ import (
 
 const (
 	tickInterval = 15 * time.Second
-	maxAttempts  = 8
-	retryBase    = time.Minute // backoff: 1m, 2m, 4m, ... capped
-	retryMax     = 30 * time.Minute
 	maxPerUser   = 20
 )
 
 type reminder struct {
-	ID       int64     `json:"id"`
-	Text     string    `json:"text"`
-	Due      time.Time `json:"due"`
-	Attempts int       `json:"attempts"`
-	NextTry  time.Time `json:"next_try"`
+	ID   int64     `json:"id"`
+	Text string    `json:"text"`
+	Due  time.Time `json:"due"`
 }
 
 type Plugin struct {
@@ -97,7 +94,7 @@ func (p *Plugin) add(ctx *plugin.Ctx, args string) error {
 		return nil
 	}
 	due := time.Now().Add(d)
-	r := reminder{ID: time.Now().UnixNano(), Text: text, Due: due, NextTry: due}
+	r := reminder{ID: time.Now().UnixNano(), Text: text, Due: due}
 	if err := p.save(ctx.User, r); err != nil {
 		return err
 	}
@@ -172,25 +169,14 @@ func (p *Plugin) deliverDue() {
 			p.env.KV.Delete(e.User, e.Key)
 			continue
 		}
-		if now.Before(r.NextTry) {
+		if now.Before(r.Due) {
 			continue
 		}
-		// SendTo queues into the paced outbound path; treat queueing as
-		// delivery but keep a bounded retry schedule in case the process
-		// dies before it drains, or the node is unreachable long-term.
+		// Send once and delete: the firmware handles radio-level retries,
+		// and repeating from here duplicates the message for the user.
 		p.env.SendTo(e.User, "reminder: "+r.Text)
-		r.Attempts++
-		if r.Attempts >= maxAttempts {
-			p.env.KV.Delete(e.User, e.Key)
-			continue
-		}
-		backoff := retryBase << (r.Attempts - 1)
-		if backoff > retryMax {
-			backoff = retryMax
-		}
-		r.NextTry = now.Add(backoff)
-		if err := p.save(e.User, r); err != nil {
-			p.env.Log.Error("updating reminder failed", "err", err)
+		if err := p.env.KV.Delete(e.User, e.Key); err != nil {
+			p.env.Log.Error("deleting delivered reminder failed", "err", err)
 		}
 	}
 }

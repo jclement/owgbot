@@ -36,9 +36,15 @@ type Bot struct {
 	sticky   *store.KV
 	limiter  *rateLimiter
 	out      chan outMsg
+	seen     map[string]time.Time // inbound dedup: sender|timestamp|text → first seen
 	cancel   context.CancelFunc
 	doneCh   chan struct{}
 }
+
+// dedupWindow is how long an inbound message signature is remembered.
+// Mesh clients re-send DMs they think went undelivered; every retry carries
+// the same sender timestamp, so within this window it's the same message.
+const dedupWindow = 10 * time.Minute
 
 // New builds a bot. Plugins are initialized in order; disabled plugins are
 // skipped entirely.
@@ -52,6 +58,7 @@ func New(tr transport.Transport, cfg *config.Provider, st *store.Store, log *slo
 		sticky:   st.Namespace(stickyNS),
 		limiter:  newRateLimiter(),
 		out:      make(chan outMsg, 256),
+		seen:     make(map[string]time.Time),
 		doneCh:   make(chan struct{}),
 	}
 	for _, p := range plugins {
@@ -220,6 +227,10 @@ func (b *Bot) handle(ctx context.Context, msg transport.Message) {
 	if text == "" {
 		return
 	}
+	if b.isDuplicate(msg, text) {
+		b.log.Debug("dropping duplicate (client retry)", "from", msg.From, "text", text)
+		return
+	}
 	admin := cfg.IsAdmin(msg.From)
 	if !admin {
 		ok, firstReject := b.limiter.allow(msg.From, cfg.RateLimit.PerMinute, cfg.RateLimit.Burst)
@@ -257,6 +268,24 @@ func (b *Bot) handle(ctx context.Context, msg transport.Message) {
 		return
 	}
 	b.handleBare(pctx, text)
+}
+
+// isDuplicate reports whether this message is a client retry of one we
+// already handled (same sender, sender timestamp, and text within the
+// window). Runs on the bot loop, so no locking needed.
+func (b *Bot) isDuplicate(msg transport.Message, text string) bool {
+	key := msg.From + "|" + strconv.FormatInt(msg.Time.Unix(), 10) + "|" + text
+	now := time.Now()
+	for k, t := range b.seen {
+		if now.Sub(t) > dedupWindow {
+			delete(b.seen, k)
+		}
+	}
+	if _, dup := b.seen[key]; dup {
+		return true
+	}
+	b.seen[key] = now
+	return false
 }
 
 func (b *Bot) handleCommand(pctx *plugin.Ctx, text string) {

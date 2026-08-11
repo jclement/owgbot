@@ -152,6 +152,26 @@ func TestStickySessionRouting(t *testing.T) {
 	}
 }
 
+func TestInboundDedup(t *testing.T) {
+	tr, _ := newTestBot(t)
+	user := "aabbccddeeff"
+	ts := time.Now()
+
+	// A client retry re-sends with the SAME sender timestamp: one reply.
+	tr.InjectAt(user, "/ver", ts)
+	tr.InjectAt(user, "/ver", ts)
+	recv(t, tr)
+	select {
+	case m := <-tr.Outbound():
+		t.Fatalf("duplicate processed: %q", m.Text)
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	// A genuinely new message (fresh timestamp) is processed.
+	tr.InjectAt(user, "/ver", ts.Add(5*time.Second))
+	recv(t, tr)
+}
+
 func TestPeriodicAdvert(t *testing.T) {
 	tr, _ := newTestBot(t) // default config: advert_interval 24h, never sent
 	deadline := time.Now().Add(2 * time.Second)
