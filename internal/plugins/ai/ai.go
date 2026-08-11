@@ -83,8 +83,8 @@ func (p *Plugin) Name() string { return "ai" }
 
 func (p *Plugin) Commands() []plugin.Command {
 	return []plugin.Command{{
-		Name: "ai", Args: "<question>",
-		Help: "ask the AI (then just keep chatting)",
+		Name: "ai", Args: "[question]",
+		Help: "chat with the AI (bare /ai says hello)",
 	}}
 }
 
@@ -93,12 +93,18 @@ func (p *Plugin) Init(env plugin.Env) error {
 	return nil
 }
 
+// greetPrompt is the synthetic instruction for a bare /ai: open the chat
+// rather than lecture about usage. It is never stored in history.
+const greetPrompt = "(the user just opened a chat with /ai and hasn't said anything yet — " +
+	"greet them briefly, by name if you know it, and invite a question; under 100 characters)"
+
 func (p *Plugin) HandleCommand(ctx *plugin.Ctx, cmd, args string) error {
 	q := strings.TrimSpace(args)
 	switch q {
 	case "":
-		ctx.Reply("usage: /ai <question> — follow-ups need no /ai. /ai clear resets")
-		return nil
+		// Bare /ai starts the conversation; the session is now sticky, so
+		// whatever they say next is the chat.
+		return p.chat(ctx, greetPrompt, false)
 	case "clear", "reset":
 		p.mu.Lock()
 		delete(p.hist, ctx.User)
@@ -106,14 +112,16 @@ func (p *Plugin) HandleCommand(ctx *plugin.Ctx, cmd, args string) error {
 		ctx.Reply("fresh context")
 		return nil
 	}
-	return p.chat(ctx, q)
+	return p.chat(ctx, q, true)
 }
 
 func (p *Plugin) HandleSession(ctx *plugin.Ctx, text string) (bool, error) {
-	return true, p.chat(ctx, text)
+	return true, p.chat(ctx, text, true)
 }
 
-func (p *Plugin) chat(ctx *plugin.Ctx, text string) error {
+// chat runs one conversational turn. transcript=false marks a synthetic
+// prompt (the /ai greeting): only the assistant's reply enters history.
+func (p *Plugin) chat(ctx *plugin.Ctx, text string, transcript bool) error {
 	p.mu.Lock()
 	history := append([]msg(nil), p.hist[ctx.User]...)
 	p.mu.Unlock()
@@ -132,7 +140,11 @@ func (p *Plugin) chat(ctx *plugin.Ctx, text string) error {
 	}
 
 	p.mu.Lock()
-	h := append(p.hist[ctx.User], msg{Role: "user", Content: text}, msg{Role: "assistant", Content: reply})
+	h := p.hist[ctx.User]
+	if transcript {
+		h = append(h, msg{Role: "user", Content: text})
+	}
+	h = append(h, msg{Role: "assistant", Content: reply})
 	if len(h) > maxHistory {
 		h = h[len(h)-maxHistory:]
 	}

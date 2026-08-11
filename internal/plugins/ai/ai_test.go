@@ -101,6 +101,25 @@ func TestDisallowedCommandBlocked(t *testing.T) {
 	}
 }
 
+func TestBareAiGreets(t *testing.T) {
+	srv := fakeOpenAI(t, []string{`{"role":"assistant","content":"hey there. what do you need?"}`})
+	p := newTestPlugin(t, srv.URL, nil)
+	var out []string
+	if err := p.HandleCommand(newCtx(&out), "ai", ""); err != nil {
+		t.Fatal(err)
+	}
+	if len(out) != 1 || !strings.Contains(out[0], "hey there") {
+		t.Fatalf("greeting: %v", out)
+	}
+	// The synthetic greeting prompt must not pollute history.
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	h := p.hist["aabbccddeeff"]
+	if len(h) != 1 || h[0].Role != "assistant" {
+		t.Fatalf("history should hold only the assistant greeting: %+v", h)
+	}
+}
+
 func TestPlainReplyNoTools(t *testing.T) {
 	srv := fakeOpenAI(t, []string{`{"role":"assistant","content":"42."}`})
 	p := newTestPlugin(t, srv.URL, func(ctx context.Context, user string, admin bool, cmd string) string {
