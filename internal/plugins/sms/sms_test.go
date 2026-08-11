@@ -209,6 +209,38 @@ func TestRecentUserGetsPushDelivery(t *testing.T) {
 	}
 }
 
+func TestPollIntervalTiers(t *testing.T) {
+	p, fake, _ := newTestSMS(t)
+	setup(t, p, fake)
+
+	// Idle by default.
+	if got := p.pollInterval(user); got != pollEveryIdle {
+		t.Fatalf("idle: %v", got)
+	}
+	// Heard on the mesh: active tier.
+	p.markHeard(user)
+	if got := p.pollInterval(user); got != pollEvery {
+		t.Fatalf("active: %v", got)
+	}
+	// Sending an SMS: conversation tier.
+	var out []string
+	p.HandleCommand(newCtx(user, &out), "sms", "4035559999 you up?")
+	if got := p.pollInterval(user); got != pollConv {
+		t.Fatalf("conversation: %v", got)
+	}
+	// A reply arriving mid-conversation extends the window.
+	fake.mu.Lock()
+	fake.inbox = append(fake.inbox, smsItem(150, "4035559999", "yep"))
+	fake.mu.Unlock()
+	c, _ := p.creds(user)
+	if n, err := p.pollUser(user, c); err != nil || n != 1 {
+		t.Fatalf("poll: %d %v", n, err)
+	}
+	if got := p.pollInterval(user); got != pollConv {
+		t.Fatalf("reply should keep conversation hot: %v", got)
+	}
+}
+
 func TestOffForgetsEverything(t *testing.T) {
 	p, fake, _ := newTestSMS(t)
 	setup(t, p, fake)

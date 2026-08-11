@@ -28,10 +28,16 @@ import (
 	"github.com/jclement/owgbot/internal/store"
 )
 
+// Polling is conversation-aware: hammer briefly when a reply is likely,
+// back way off when nobody's talking.
 const (
-	pollEvery   = 2 * time.Minute
-	maxPerDay   = 25  // outbound cap per user — contains a stolen node
-	maxSMSBytes = 160 // one SMS segment; keep the mesh:SMS mapping 1:1
+	tick          = 30 * time.Second // scheduler resolution
+	pollConv      = 30 * time.Second // mid-conversation (sent an SMS recently)
+	convWindow    = 15 * time.Minute // how long a send keeps the conversation hot
+	pollEvery     = 2 * time.Minute  // user around on the mesh, no active convo
+	pollEveryIdle = 10 * time.Minute // absent: texts queue anyway
+	maxPerDay     = 25               // outbound cap per user — contains a stolen node
+	maxSMSBytes   = 160              // one SMS segment; keep the mesh:SMS mapping 1:1
 )
 
 type queued struct {
@@ -46,6 +52,9 @@ type Plugin struct {
 	ipURL string
 	stop  chan struct{}
 	once  sync.Once
+
+	opMu  sync.Mutex // serializes polls (watermark integrity)
+	delMu sync.Mutex // serializes deliveries (no double-send)
 
 	ipMu     sync.Mutex
 	cachedIP string
@@ -116,9 +125,24 @@ func (p *Plugin) Stop() { p.once.Do(func() { close(p.stop) }) }
 const recentWindow = 15 * time.Minute
 
 // Queued texts ride the same delivery triggers as /mail — and both triggers
-// refresh the user's last-heard time for the push-when-recent path.
-func (p *Plugin) HandleActivity(user string) { p.markHeard(user); p.deliver(user) }
-func (p *Plugin) HandleAdvert(user string)   { p.markHeard(user); p.deliver(user) }
+// refresh the user's last-heard time for the push-when-recent path. A user
+// resurfacing after an idle stretch also gets an immediate catch-up poll
+// (async — HandleActivity runs on the bot loop and must not block on HTTP).
+func (p *Plugin) HandleActivity(user string) { p.heardNow(user) }
+func (p *Plugin) HandleAdvert(user string)   { p.heardNow(user) }
+
+func (p *Plugin) heardNow(user string) {
+	wasIdle := !p.heardRecently(user)
+	p.markHeard(user)
+	p.deliver(user)
+	if c, ok := p.creds(user); ok && wasIdle {
+		go func() {
+			if _, err := p.pollUser(user, c); err == nil {
+				p.deliver(user)
+			}
+		}()
+	}
+}
 
 func (p *Plugin) markHeard(user string) {
 	p.env.KV.Set(user, "heard", strconv.FormatInt(time.Now().Unix(), 10))
@@ -230,8 +254,33 @@ func (p *Plugin) send(ctx *plugin.Ctx, to, message string) error {
 		return nil
 	}
 	p.env.KV.Set(ctx.User, "sent:"+day, strconv.Itoa(sent+1))
+	// Sending starts (or extends) a conversation: poll hard for a reply.
+	p.env.KV.Set(ctx.User, "conv", strconv.FormatInt(time.Now().Unix(), 10))
 	ctx.Reply(fmt.Sprintf("sent to %s (%d/%d today)", dst, sent+1, maxPerDay))
 	return nil
+}
+
+// inConversation reports whether the user sent (or received, mid-thread) an
+// SMS within the conversation window.
+func (p *Plugin) inConversation(user string) bool {
+	v, err := p.env.KV.Get(user, "conv")
+	if err != nil {
+		return false
+	}
+	ts, err := strconv.ParseInt(v, 10, 64)
+	return err == nil && time.Since(time.Unix(ts, 0)) < convWindow
+}
+
+// pollInterval picks the cadence tier for a user.
+func (p *Plugin) pollInterval(user string) time.Duration {
+	switch {
+	case p.inConversation(user):
+		return pollConv
+	case p.heardRecently(user):
+		return pollEvery
+	default:
+		return pollEveryIdle
+	}
 }
 
 func (p *Plugin) check(ctx *plugin.Ctx) error {
@@ -271,7 +320,7 @@ func (p *Plugin) status(ctx *plugin.Ctx) error {
 
 // pollLoop fetches new inbound texts for every configured user.
 func (p *Plugin) pollLoop() {
-	t := time.NewTicker(pollEvery)
+	t := time.NewTicker(tick)
 	defer t.Stop()
 	for {
 		select {
@@ -286,6 +335,9 @@ func (p *Plugin) pollLoop() {
 		for _, e := range entries {
 			var c creds
 			if json.Unmarshal([]byte(e.Value), &c) != nil {
+				continue
+			}
+			if time.Since(p.lastPolled(e.User)) < p.pollInterval(e.User) {
 				continue
 			}
 			n, err := p.pollUser(e.User, c)
@@ -329,8 +381,22 @@ func (p *Plugin) notifyAuthFailure(user string, err error) {
 	p.env.Log.Info("sms auth failure notified", "user", user)
 }
 
+func (p *Plugin) lastPolled(user string) time.Time {
+	if v, err := p.env.KV.Get(user, "polled"); err == nil {
+		if ts, perr := strconv.ParseInt(v, 10, 64); perr == nil {
+			return time.Unix(ts, 0)
+		}
+	}
+	return time.Time{}
+}
+
 // pollUser fetches messages newer than the user's watermark and queues them.
+// Serialized per plugin: the ticker loop and activity-triggered catch-up
+// polls must not interleave watermark updates.
 func (p *Plugin) pollUser(user string, c creds) (int, error) {
+	p.opMu.Lock()
+	defer p.opMu.Unlock()
+	p.env.KV.Set(user, "polled", strconv.FormatInt(time.Now().Unix(), 10))
 	msgs, err := p.api.fetch(c)
 	if err != nil {
 		return 0, err
@@ -355,11 +421,18 @@ func (p *Plugin) pollUser(user string, c creds) (int, error) {
 	if newMax != last {
 		p.env.KV.Set(user, "last_id", strconv.FormatInt(newMax, 10))
 	}
+	// A reply mid-conversation keeps the thread hot.
+	if n > 0 && p.inConversation(user) {
+		p.env.KV.Set(user, "conv", strconv.FormatInt(time.Now().Unix(), 10))
+	}
 	return n, nil
 }
 
-// deliver DMs all queued texts to a now-reachable user.
+// deliver DMs all queued texts to a now-reachable user. Serialized so an
+// async catch-up poll and the bot loop can't double-deliver.
 func (p *Plugin) deliver(user string) {
+	p.delMu.Lock()
+	defer p.delMu.Unlock()
 	entries := p.mustList(user, "q:")
 	for _, e := range entries {
 		var q queued
