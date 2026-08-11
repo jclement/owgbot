@@ -2,6 +2,7 @@ package ai
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -48,6 +49,7 @@ func newCtx(out *[]string) *plugin.Ctx {
 	return &plugin.Ctx{
 		Context: context.Background(),
 		User:    "aabbccddeeff",
+		SNR:     -7.5,
 		Reply:   func(s string) { *out = append(*out, s) },
 		Config:  &c,
 	}
@@ -60,8 +62,8 @@ func TestToolCallRoundTrip(t *testing.T) {
 		`{"role":"assistant","content":"2 nodes nearby: bob and eve."}`,
 	})
 	var ran []string
-	p := newTestPlugin(t, srv.URL, func(ctx context.Context, user string, admin bool, cmd string) string {
-		ran = append(ran, user+" "+cmd)
+	p := newTestPlugin(t, srv.URL, func(pctx *plugin.Ctx, cmd string) string {
+		ran = append(ran, fmt.Sprintf("%s %s snr=%.1f", pctx.User, cmd, pctx.SNR))
 		return "2 node(s): bob, eve"
 	})
 
@@ -69,7 +71,7 @@ func TestToolCallRoundTrip(t *testing.T) {
 	if err := p.HandleCommand(newCtx(&out), "ai", "who's around?"); err != nil {
 		t.Fatal(err)
 	}
-	if len(ran) != 1 || ran[0] != "aabbccddeeff /nodes" {
+	if len(ran) != 1 || ran[0] != "aabbccddeeff /nodes snr=-7.5" {
 		t.Fatalf("tool executed %v", ran)
 	}
 	if len(out) != 1 || !strings.Contains(out[0], "bob and eve") {
@@ -84,7 +86,7 @@ func TestDisallowedCommandBlocked(t *testing.T) {
 		`{"role":"assistant","content":"that command is off limits."}`,
 	})
 	called := false
-	p := newTestPlugin(t, srv.URL, func(ctx context.Context, user string, admin bool, cmd string) string {
+	p := newTestPlugin(t, srv.URL, func(pctx *plugin.Ctx, cmd string) string {
 		called = true
 		return "should never run"
 	})
@@ -122,7 +124,7 @@ func TestBareAiGreets(t *testing.T) {
 
 func TestPlainReplyNoTools(t *testing.T) {
 	srv := fakeOpenAI(t, []string{`{"role":"assistant","content":"42."}`})
-	p := newTestPlugin(t, srv.URL, func(ctx context.Context, user string, admin bool, cmd string) string {
+	p := newTestPlugin(t, srv.URL, func(pctx *plugin.Ctx, cmd string) string {
 		t.Fatal("no tool should run")
 		return ""
 	})

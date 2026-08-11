@@ -7,7 +7,6 @@
 package ai
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -57,9 +56,10 @@ var commandTool = []openai.Tool{{
 
 type msg = openai.Message
 
-// RunCommand dispatches a slash command as the given user and returns the
-// reply text (wired to bot.RunCommand).
-type RunCommand func(ctx context.Context, user string, admin bool, command string) string
+// RunCommand dispatches a slash command in the context of the triggering
+// message (user, SNR, hops) and returns the reply text (wired to
+// bot.RunCommand).
+type RunCommand func(ctx *plugin.Ctx, command string) string
 
 type Plugin struct {
 	env    plugin.Env
@@ -199,7 +199,7 @@ func (p *Plugin) execTool(ctx *plugin.Ctx, tc openai.ToolCall) string {
 		return "command not allowed"
 	}
 	p.env.Log.Info("ai tool call", "user", ctx.User, "command", cmd)
-	result := p.runCmd(ctx.Context, ctx.User, false, cmd)
+	result := p.runCmd(ctx, cmd)
 	if len(result) > 500 {
 		result = result[:500]
 	}
