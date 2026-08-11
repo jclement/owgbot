@@ -21,6 +21,7 @@ protocol is implemented in-repo ([internal/transport/meshcore](internal/transpor
 | `/seen <node>` / `/nodes` | mesh radar: when nodes were last heard (adverts + messages) |
 | `/mail <node> <text>` | store-and-forward mail, delivered when the recipient is next heard |
 | `/wall [text]` | the graffiti wall |
+| `/sms` | send/receive SMS via **your own** voip.ms account (`/sms init <did> <user> <pass>`); inbound texts queue and deliver when you're next heard |
 | `/wordle` | daily word, shared mesh-wide; guesses are just bare 5-letter messages |
 | `/ai <question>` | LLM over LoRa (only present when an OpenAI key is configured) |
 | `/zork` | AI-invented micro text adventure, different every game — saves survive restarts (needs the OpenAI key) |

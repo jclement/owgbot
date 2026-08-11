@@ -38,6 +38,7 @@ import (
 	"github.com/jclement/owgbot/internal/plugins/ping"
 	"github.com/jclement/owgbot/internal/plugins/remind"
 	"github.com/jclement/owgbot/internal/plugins/seen"
+	"github.com/jclement/owgbot/internal/plugins/sms"
 	"github.com/jclement/owgbot/internal/plugins/ver"
 	"github.com/jclement/owgbot/internal/plugins/wall"
 	"github.com/jclement/owgbot/internal/plugins/weather"
@@ -311,6 +312,7 @@ func runBot(cfg *config.Provider, tr transport.Transport, ui func(*bot.Bot, cont
 		seen.New(),
 		mail.New(),
 		wall.New(),
+		sms.New(""),
 		wordle.New(),
 		bbs.New(),
 	}
