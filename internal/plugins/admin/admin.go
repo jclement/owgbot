@@ -5,6 +5,9 @@ package admin
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"strconv"
 	"strings"
@@ -24,6 +27,9 @@ type ChannelWatcher interface {
 	WatchedChannels() []int
 	Watch(ch int) error
 	Unwatch(ch int) error
+	// ProvisionChannel writes a channel (name + 16-byte secret) into a
+	// radio slot so the bot can hear it at all.
+	ProvisionChannel(ch int, name string, secret []byte) error
 }
 
 type Plugin struct {
@@ -47,7 +53,7 @@ func (p *Plugin) Commands() []plugin.Command {
 		{Name: "plugins", Help: "list plugins", Admin: true},
 		{Name: "update", Help: "self-update from github", Admin: true},
 		{Name: "advert", Help: "broadcast a self-advert now", Admin: true},
-		{Name: "watch", Args: "[#ch | -#ch]", Help: "list/watch/unwatch channels", Admin: true},
+		{Name: "watch", Args: "[#ch | -#ch | slot name key]", Help: "list/watch/unwatch/add channels", Admin: true},
 	}
 }
 
@@ -146,8 +152,10 @@ func (p *Plugin) HandleCommand(ctx *plugin.Ctx, cmd, args string) error {
 	return nil
 }
 
-// watch manages the channel watch list: bare = list, "#name"/"N" = add,
-// "-#name"/"-N" = remove. Names come from the radio's channel slots.
+// watch manages the channel watch list: bare = list, "#name"/"N" = watch,
+// "-#name"/"-N" = unwatch, "slot name key" = provision a channel onto the
+// radio (key = 16 bytes as base64 or 32-char hex, from the app's channel
+// share) and start watching it.
 func (p *Plugin) watch(ctx *plugin.Ctx, args string) error {
 	w := p.watcher()
 	args = strings.TrimSpace(args)
@@ -155,11 +163,20 @@ func (p *Plugin) watch(ctx *plugin.Ctx, args string) error {
 		ctx.Reply(p.watchList(w))
 		return nil
 	}
+	if fields := strings.Fields(args); len(fields) == 3 {
+		return p.provision(ctx, w, fields)
+	}
 	remove := strings.HasPrefix(args, "-")
+	hashtag := strings.HasPrefix(strings.TrimPrefix(args, "-"), "#")
 	spec := strings.TrimPrefix(strings.TrimPrefix(args, "-"), "#")
 	slot, ok := p.resolveChannel(spec)
+	if !ok && !remove && hashtag {
+		// Hashtag channels are keyless-joinable: the secret is derived
+		// from the name, so we can provision it ourselves.
+		return p.joinHashtag(ctx, w, spec)
+	}
 	if !ok {
-		ctx.Reply("no channel " + args + " — /watch to list slots")
+		ctx.Reply("the radio has no channel " + args + " — /watch lists slots, /watch #name joins a hashtag channel, /watch <slot> <name> <key> adds a private one")
 		return nil
 	}
 	var err error
@@ -188,7 +205,7 @@ func (p *Plugin) watchList(w ChannelWatcher) string {
 		}
 		label := fmt.Sprintf("%d", slot)
 		if name != "" {
-			label = fmt.Sprintf("%d #%s", slot, name)
+			label = fmt.Sprintf("%d #%s", slot, strings.TrimPrefix(name, "#"))
 		}
 		if watched[slot] {
 			on = append(on, label)
@@ -208,7 +225,84 @@ func (p *Plugin) watchList(w ChannelWatcher) string {
 	return s
 }
 
+// joinHashtag provisions a public hashtag channel: the 16-byte secret is
+// the first half of SHA256 of the "#name" string (MeshCore convention), so
+// knowing the name IS knowing the key.
+func (p *Plugin) joinHashtag(ctx *plugin.Ctx, w ChannelWatcher, name string) error {
+	full := "#" + strings.ToLower(name)
+	slot := -1
+	for s := 0; s < 8; s++ {
+		if p.env.ChannelName(s) == "" {
+			slot = s
+			break
+		}
+	}
+	if slot < 0 {
+		ctx.Reply("all 8 channel slots are in use — nothing free for " + full)
+		return nil
+	}
+	if err := w.ProvisionChannel(slot, full, hashtagKey(full)); err != nil {
+		ctx.Reply("radio refused the channel: " + err.Error())
+		return nil
+	}
+	if err := w.Watch(slot); err != nil {
+		return err
+	}
+	p.env.Log.Info("hashtag channel joined", "slot", slot, "name", full)
+	ctx.Reply("joined " + full + " (slot " + strconv.Itoa(slot) + ")\n" + p.watchList(w))
+	return nil
+}
+
+// hashtagKey derives a hashtag channel's secret: first 16 bytes of
+// SHA256 of the full "#name" string.
+func hashtagKey(fullName string) []byte {
+	sum := sha256.Sum256([]byte(fullName))
+	return sum[:16]
+}
+
+// provision writes a channel into a radio slot and starts watching it.
+func (p *Plugin) provision(ctx *plugin.Ctx, w ChannelWatcher, fields []string) error {
+	slot, err := strconv.Atoi(fields[0])
+	if err != nil || slot < 0 || slot > 7 {
+		ctx.Reply("slot must be 0-7: /watch <slot> <name> <key>")
+		return nil
+	}
+	name := strings.TrimPrefix(fields[1], "#")
+	secret, err := parseChannelKey(fields[2])
+	if err != nil {
+		ctx.Reply("bad key — want 16 bytes as base64 or 32 hex chars (from the app's channel share)")
+		return nil
+	}
+	if err := w.ProvisionChannel(slot, name, secret); err != nil {
+		ctx.Reply("radio refused the channel: " + err.Error())
+		return nil
+	}
+	if err := w.Watch(slot); err != nil {
+		return err
+	}
+	p.env.Log.Info("channel provisioned", "slot", slot, "name", name)
+	ctx.Reply(p.watchList(w))
+	return nil
+}
+
+// parseChannelKey accepts a 16-byte channel secret as base64 (std or URL,
+// padded or not) or 32 hex chars.
+func parseChannelKey(s string) ([]byte, error) {
+	if b, err := hex.DecodeString(s); err == nil && len(b) == 16 {
+		return b, nil
+	}
+	for _, enc := range []*base64.Encoding{
+		base64.StdEncoding, base64.RawStdEncoding, base64.URLEncoding, base64.RawURLEncoding,
+	} {
+		if b, err := enc.DecodeString(s); err == nil && len(b) == 16 {
+			return b, nil
+		}
+	}
+	return nil, fmt.Errorf("not a 16-byte key")
+}
+
 // resolveChannel turns a slot number or channel name into a slot index.
+// Names match with or without their leading '#'.
 func (p *Plugin) resolveChannel(spec string) (int, bool) {
 	if n, err := strconv.Atoi(spec); err == nil {
 		if n >= 0 && n <= 7 {
@@ -216,8 +310,10 @@ func (p *Plugin) resolveChannel(spec string) (int, bool) {
 		}
 		return 0, false
 	}
+	want := strings.TrimPrefix(spec, "#")
 	for slot := 0; slot < 8; slot++ {
-		if name := p.env.ChannelName(slot); name != "" && strings.EqualFold(name, spec) {
+		name := strings.TrimPrefix(p.env.ChannelName(slot), "#")
+		if name != "" && strings.EqualFold(name, want) {
 			return slot, true
 		}
 	}

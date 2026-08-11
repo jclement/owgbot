@@ -66,6 +66,8 @@ type Transport interface {
 	// ChannelName returns the radio's name for a channel slot ("" if the
 	// slot is unconfigured).
 	ChannelName(channel int) string
+	// SetChannel provisions a channel slot on the radio (16-byte secret).
+	SetChannel(ctx context.Context, channel int, name string, secret []byte) error
 	// Send delivers a direct message to the node with the given public-key
 	// prefix (12 hex chars). Blocks until the radio accepts (or rejects) it.
 	Send(ctx context.Context, to string, text string) error

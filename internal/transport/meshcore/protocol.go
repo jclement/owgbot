@@ -20,6 +20,7 @@ const (
 	cmdSyncNextMessage = 0x0A
 	cmdDeviceQuery     = 0x16
 	cmdGetChannel      = 0x1F
+	cmdSetChannel      = 0x20
 
 	respOK             = 0x00
 	respErr            = 0x01
@@ -171,6 +172,17 @@ func parseChannelMsg(f []byte) (channelMsg, error) {
 
 // buildGetChannel builds CMD_GET_CHANNEL: [0x1F][slot].
 func buildGetChannel(slot byte) []byte { return []byte{cmdGetChannel, slot} }
+
+// buildSetChannel builds CMD_SET_CHANNEL:
+// [0x20][slot][name 32B nul-padded][secret 16B]. 50 bytes total.
+func buildSetChannel(slot byte, name string, secret []byte) []byte {
+	f := make([]byte, 50)
+	f[0] = cmdSetChannel
+	f[1] = slot
+	copy(f[2:34], name)
+	copy(f[34:50], secret)
+	return f
+}
 
 // parseChannelInfo parses RESP_CODE_CHANNEL_INFO (0x12):
 // [0x12][slot][name 32B nul-padded][secret 16B]. The secret is ignored.

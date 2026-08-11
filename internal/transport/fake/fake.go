@@ -99,6 +99,12 @@ func (t *Transport) SetChannelName(channel int, name string) {
 	t.chanNames[channel] = name
 }
 
+// SetChannel provisions a channel slot (fake: records the name).
+func (t *Transport) SetChannel(ctx context.Context, channel int, name string, secret []byte) error {
+	t.SetChannelName(channel, name)
+	return nil
+}
+
 // ChannelOutbound exposes the bot's channel posts (tests).
 func (t *Transport) ChannelOutbound() <-chan ChannelSent { return t.chansends }
 

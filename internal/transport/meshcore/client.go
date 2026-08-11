@@ -252,6 +252,24 @@ func (c *Client) ChannelName(channel int) string {
 	return c.channels[channel]
 }
 
+// SetChannel provisions a channel slot on the radio (name + 16-byte secret).
+func (c *Client) SetChannel(ctx context.Context, channel int, name string, secret []byte) error {
+	if len(secret) != 16 {
+		return fmt.Errorf("meshcore: channel secret must be 16 bytes (got %d)", len(secret))
+	}
+	f, err := c.roundTrip(ctx, buildSetChannel(byte(channel), name, secret))
+	if err != nil {
+		return err
+	}
+	if f[0] == respErr {
+		return fmt.Errorf("meshcore: set channel rejected")
+	}
+	c.mu.Lock()
+	c.channels[channel] = name
+	c.mu.Unlock()
+	return nil
+}
+
 // syncContacts refreshes the prefix→name map from the radio's contact list.
 // CMD_GET_CONTACTS answers with a stream of frames (START, CONTACT×N, END),
 // so it holds the command lock and reads until the END marker.

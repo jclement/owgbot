@@ -167,6 +167,13 @@ func (b *Bot) Watch(ch int) error { return b.setWatch(ch, true) }
 // Unwatch removes a channel slot from the watch list (persisted).
 func (b *Bot) Unwatch(ch int) error { return b.setWatch(ch, false) }
 
+// ProvisionChannel writes a channel (name + secret) into a radio slot.
+func (b *Bot) ProvisionChannel(ch int, name string, secret []byte) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return b.tr.SetChannel(ctx, ch, name, secret)
+}
+
 func (b *Bot) setWatch(ch int, add bool) error {
 	cur := b.WatchedChannels()
 	next := make([]int, 0, len(cur)+1)
