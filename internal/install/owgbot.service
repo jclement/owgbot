@@ -1,0 +1,24 @@
+[Unit]
+Description=owgbot MeshCore bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=owgbot
+Group=owgbot
+SupplementaryGroups=dialout
+ExecStart=/opt/owgbot/owgbot serve -c /etc/owgbot/config.yml
+Restart=always
+RestartSec=3
+# /update swaps the binary and exits; Restart=always brings up the new build.
+
+# The service only needs its binary dir (self-update), state dir, and serial.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/owgbot /var/lib/owgbot
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

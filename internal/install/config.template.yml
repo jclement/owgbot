@@ -1,0 +1,49 @@
+# owgbot configuration. Live-reloaded on save (serial_port/data_dir changes
+# need a service restart).
+
+serial_port: /dev/ttyUSB0
+baud: 115200
+data_dir: /var/lib/owgbot
+
+# Outbound chunk size in bytes. Protocol max for a DM is 160, but routing
+# path + crypto overhead eat into the LoRa packet on multi-hop routes —
+# 140 leaves margin. Raise toward 150-160 if your mesh is mostly direct.
+max_msg_len: 140
+# Minimum gap between outbound messages — LoRa airtime is shared.
+send_interval_ms: 2000
+
+# Node public-key prefixes (12 hex chars) allowed to run admin commands
+# (/update, /plugins). Find yours by DMing the bot and checking the journal:
+#   journalctl -u owgbot | grep message
+admins: []
+#  - "a1b2c3d4e5f6"
+
+# Per-user rate limit. Admins are exempt.
+rate_limit:
+  per_minute: 6
+  burst: 3
+
+# Where /update looks for release builds.
+github_repo: jclement/owgbot
+
+# Per-plugin settings. All plugins are enabled unless told otherwise.
+plugins:
+  weather:
+    enabled: true
+  remind:
+    enabled: true
+  gem:
+    enabled: true
+    settings:
+      page_bytes: "350"   # document bytes per reply (each reply ≈3 radio chunks)
+  # /ai and /zork only appear when a key is set here (or OPENAI_API_KEY in
+  # the service environment). Both share this key; models are per-plugin.
+  ai:
+    settings:
+      api_key: ""
+      model: "gpt-5-mini"
+  zork:
+    settings:
+      model: "gpt-5-nano"         # per-turn game master (cheapest tier is fine)
+      design_model: "gpt-5-mini"  # invents each game's world (one call per game)
+      min_moves: "10"             # wins before this many moves are rejected as premature

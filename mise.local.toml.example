@@ -1,0 +1,4 @@
+# Copy to mise.local.toml (gitignored) and fill in your Pi's coordinates.
+[env]
+DEPLOY_HOST = "owgbot.local"
+DEPLOY_USER = "pi"

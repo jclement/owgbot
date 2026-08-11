@@ -1,0 +1,42 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Test
+        run: |
+          go vet ./...
+          go test ./...
+
+      - name: Build
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          export OWGBOT_TAG="${GITHUB_REF_NAME}"
+          mkdir -p dist
+          GOOS=linux GOARCH=arm64 go build -trimpath -ldflags "$(./scripts/ldflags.sh)" -o dist/owgbot-linux-arm64 .
+          GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "$(./scripts/ldflags.sh)" -o dist/owgbot-linux-amd64 .
+          cd dist && sha256sum owgbot-* > checksums.txt
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/owgbot-linux-arm64
+            dist/owgbot-linux-amd64
+            dist/checksums.txt
+          generate_release_notes: true

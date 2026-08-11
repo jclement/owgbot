@@ -1,0 +1,31 @@
+[tools]
+go = "1.26"
+
+[tasks.dev]
+description = "Fake radio + chat TUI (owgbot tui)"
+run = 'go run -ldflags "$(./scripts/ldflags.sh)" . tui'
+
+[tasks."dev:hw"]
+description = "Real Heltec on USB serial, local state (owgbot serve, auto-detected port)"
+run = 'go run -ldflags "$(./scripts/ldflags.sh)" . serve'
+
+[tasks.doctor]
+description = "Check config, serial, radio, and network (owgbot doctor)"
+run = 'go run -ldflags "$(./scripts/ldflags.sh)" . doctor'
+
+[tasks.test]
+description = "Run tests and vet"
+run = ["go vet ./...", "go test ./..."]
+
+[tasks.build]
+description = "Build for this machine"
+run = 'go build -ldflags "$(./scripts/ldflags.sh)" -o owgbot .'
+
+[tasks.build-pi]
+description = "Cross-compile for the Raspberry Pi (linux/arm64, static)"
+run = 'CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags "$(./scripts/ldflags.sh)" -o dist/owgbot-linux-arm64 .'
+
+[tasks.deploy]
+description = "Build for the Pi and deploy over SSH (host/user from mise.local.toml)"
+depends = ["build-pi"]
+run = "./scripts/deploy.sh"
