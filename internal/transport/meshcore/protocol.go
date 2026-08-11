@@ -180,11 +180,12 @@ func parseContactMsg(f []byte) (contactMsg, error) {
 		return m, fmt.Errorf("meshcore: short contact msg frame (%d bytes)", len(f))
 	}
 	m.fromPrefix = append([]byte(nil), f[off:off+6]...)
-	// Receive-side path_len semantics: 0xFF = direct (no path recorded);
-	// otherwise the packet was flooded and path_len repeater hops were
-	// recorded on the way here.
+	// Receive-side path_len semantics: 0xFF = the packet was ROUTED along a
+	// sender-prescribed path, which is consumed in transit — no hop count
+	// reaches us (could be zero hops or several). A numeric value means it
+	// was FLOODED and that many repeater hops were recorded on the way.
 	if pathLen := f[off+6]; pathLen == 0xFF {
-		m.hops = 0
+		m.hops = -1 // routed: hop count unknown
 	} else {
 		m.hops = int(pathLen)
 	}

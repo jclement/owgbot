@@ -112,11 +112,12 @@ func TestParseContactMsgV3WithSNR(t *testing.T) {
 	}
 }
 
-// Receive-side path_len 0xFF means the message arrived DIRECT.
-func TestParseContactMsgDirectPath(t *testing.T) {
+// Receive-side path_len 0xFF means the message was ROUTED along a
+// sender-prescribed path — the hop count is not recorded in transit.
+func TestParseContactMsgRoutedPath(t *testing.T) {
 	f := []byte{respContactMsgV3, 0x10, 0, 0} // SNR +4dB
 	f = append(f, 1, 2, 3, 4, 5, 6)
-	f = append(f, 0xFF) // direct
+	f = append(f, 0xFF) // routed
 	f = append(f, 0)
 	ts := make([]byte, 4)
 	binary.LittleEndian.PutUint32(ts, 1700000002)
@@ -127,8 +128,18 @@ func TestParseContactMsgDirectPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if m.hops != -1 {
+		t.Fatalf("0xFF path must mean routed/unknown (-1), got %d", m.hops)
+	}
+
+	// path_len 0 = flooded and heard directly.
+	f[4+6] = 0
+	m, err = parseContactMsg(f)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if m.hops != 0 {
-		t.Fatalf("0xFF path must mean direct (0 hops), got %d", m.hops)
+		t.Fatalf("flood path_len 0 must mean direct, got %d", m.hops)
 	}
 }
 

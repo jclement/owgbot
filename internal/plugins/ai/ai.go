@@ -221,7 +221,9 @@ func peerContext(ctx *plugin.Ctx, env plugin.Env) string {
 	case ctx.Hops == 0:
 		link += ", direct link"
 	case ctx.Hops > 0:
-		link += fmt.Sprintf(", relayed over %d hop(s) (SNR is the last hop's)", ctx.Hops)
+		link += fmt.Sprintf(", flooded over %d hop(s) (SNR is the last hop's)", ctx.Hops)
+	default:
+		link += ", routed path (hop count unknown; SNR is the last hop's)"
 	}
 	return fmt.Sprintf("Current peer: %s, %s.", who, link)
 }
