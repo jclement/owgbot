@@ -16,6 +16,10 @@ send_interval_ms: 2000
 # (Go duration; "0" disables). /advert sends one on demand.
 advert_interval: "24h"
 
+# How often to check GitHub for a newer release and DM admins about it
+# (Go duration; "0" disables). Installing still takes an explicit /update.
+update_check: "6h"
+
 # Node public-key prefixes (12 hex chars) allowed to run admin commands
 # (/update, /plugins). Find yours by DMing the bot and checking the journal:
 #   journalctl -u owgbot | grep message

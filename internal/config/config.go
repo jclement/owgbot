@@ -33,6 +33,11 @@ type Config struct {
 	// mesh knows it exists (Go duration, e.g. "24h"; "0" disables).
 	AdvertInterval string `yaml:"advert_interval"`
 
+	// UpdateCheck is how often to look for a newer GitHub release and DM
+	// admins about it (Go duration; "0" disables). Installing still takes
+	// an explicit /update.
+	UpdateCheck string `yaml:"update_check"`
+
 	// Admins lists node public-key prefixes (12 hex chars) allowed to run
 	// admin commands.
 	Admins []string `yaml:"admins"`
@@ -73,11 +78,16 @@ func (c *Config) Setting(plugin, key, def string) string {
 }
 
 // AdvertEvery returns the periodic-advert interval (0 = disabled).
-func (c *Config) AdvertEvery() time.Duration {
-	if c.AdvertInterval == "" || c.AdvertInterval == "0" {
+func (c *Config) AdvertEvery() time.Duration { return parseInterval(c.AdvertInterval) }
+
+// UpdateCheckEvery returns the update-check interval (0 = disabled).
+func (c *Config) UpdateCheckEvery() time.Duration { return parseInterval(c.UpdateCheck) }
+
+func parseInterval(s string) time.Duration {
+	if s == "" || s == "0" {
 		return 0
 	}
-	d, err := time.ParseDuration(c.AdvertInterval)
+	d, err := time.ParseDuration(s)
 	if err != nil || d < 0 {
 		return 0
 	}
@@ -104,6 +114,7 @@ func Default() Config {
 		MaxMsgLen:      140,
 		SendIntervalMS: 2000,
 		AdvertInterval: "24h",
+		UpdateCheck:    "6h",
 		RateLimit:      RateLimit{PerMinute: 6, Burst: 3},
 		GithubRepo:     "jclement/owgbot",
 	}
@@ -158,9 +169,11 @@ func (p *Provider) parseFile(path string) (Config, error) {
 	if c.MaxMsgLen < 20 || c.MaxMsgLen > 160 {
 		return c, fmt.Errorf("config: max_msg_len must be 20..160 (got %d)", c.MaxMsgLen)
 	}
-	if c.AdvertInterval != "" && c.AdvertInterval != "0" {
-		if _, err := time.ParseDuration(c.AdvertInterval); err != nil {
-			return c, fmt.Errorf("config: bad advert_interval %q (want e.g. \"24h\" or \"0\")", c.AdvertInterval)
+	for name, v := range map[string]string{"advert_interval": c.AdvertInterval, "update_check": c.UpdateCheck} {
+		if v != "" && v != "0" {
+			if _, err := time.ParseDuration(v); err != nil {
+				return c, fmt.Errorf("config: bad %s %q (want e.g. \"24h\" or \"0\")", name, v)
+			}
 		}
 	}
 	return c, nil
