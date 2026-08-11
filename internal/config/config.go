@@ -38,6 +38,11 @@ type Config struct {
 	// an explicit /update.
 	UpdateCheck string `yaml:"update_check"`
 
+	// WatchChannels lists channel slots (0-7, as configured on the radio)
+	// where the bot answers "@owgbot" or "cmd" with a one-line pointer to
+	// DM it — and freshens its advert so people can actually add it.
+	WatchChannels []int `yaml:"watch_channels"`
+
 	// Admins lists node public-key prefixes (12 hex chars) allowed to run
 	// admin commands.
 	Admins []string `yaml:"admins"`
@@ -174,6 +179,11 @@ func (p *Provider) parseFile(path string) (Config, error) {
 			if _, err := time.ParseDuration(v); err != nil {
 				return c, fmt.Errorf("config: bad %s %q (want e.g. \"24h\" or \"0\")", name, v)
 			}
+		}
+	}
+	for _, ch := range c.WatchChannels {
+		if ch < 0 || ch > 7 {
+			return c, fmt.Errorf("config: watch_channels entries must be 0..7 (got %d)", ch)
 		}
 	}
 	return c, nil

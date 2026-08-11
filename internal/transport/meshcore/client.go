@@ -31,6 +31,7 @@ type Client struct {
 	log      *slog.Logger
 
 	msgs    chan transport.Message
+	chmsgs  chan transport.ChannelMessage
 	adverts chan string
 
 	cmdMu sync.Mutex // serializes command round-trips (protocol allows one in flight)
@@ -53,6 +54,7 @@ func New(portName string, baud int, log *slog.Logger) *Client {
 		baud:     baud,
 		log:      log.With("component", "meshcore"),
 		msgs:     make(chan transport.Message, 32),
+		chmsgs:   make(chan transport.ChannelMessage, 32),
 		adverts:  make(chan string, 32),
 		kick:     make(chan struct{}, 1),
 		done:     make(chan struct{}),
@@ -73,6 +75,23 @@ func (c *Client) Start(ctx context.Context) error {
 func (c *Client) Messages() <-chan transport.Message { return c.msgs }
 
 func (c *Client) Adverts() <-chan string { return c.adverts }
+
+func (c *Client) ChannelMessages() <-chan transport.ChannelMessage { return c.chmsgs }
+
+// SendChannel posts a message to a channel slot.
+func (c *Client) SendChannel(ctx context.Context, channel int, text string) error {
+	if len(text) > 130 {
+		text = text[:130] // channel messages cap lower than DMs
+	}
+	f, err := c.roundTrip(ctx, buildSendChannelMsg(byte(channel), text, time.Now()))
+	if err != nil {
+		return err
+	}
+	if f[0] == respErr {
+		return fmt.Errorf("meshcore: channel send rejected")
+	}
+	return nil
+}
 
 func (c *Client) NodeName(prefix string) string {
 	c.mu.Lock()
@@ -408,7 +427,17 @@ func (c *Client) syncMessages(ctx context.Context) error {
 				c.log.Warn("inbound queue full; dropping message", "from", msg.From)
 			}
 		case respChannelMsgRecv, respChannelMsgV3:
-			// DM-only bot: ignore channel traffic.
+			m, err := parseChannelMsg(f)
+			if err != nil {
+				c.log.Warn("bad channel msg frame", "err", err)
+				continue
+			}
+			select {
+			case c.chmsgs <- transport.ChannelMessage{
+				Channel: m.channel, Text: m.text, SNR: m.snr, Time: m.timestamp,
+			}:
+			default:
+			}
 		default:
 			c.log.Debug("ignoring sync frame", "code", fmt.Sprintf("0x%02x", f[0]))
 		}

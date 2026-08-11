@@ -30,6 +30,16 @@ type Message struct {
 	Time time.Time
 }
 
+// ChannelMessage is a message heard on a shared channel. Channels are
+// symmetric-key groups: there is NO cryptographic sender identity — the text
+// is all there is.
+type ChannelMessage struct {
+	Channel int
+	Text    string
+	SNR     float64
+	Time    time.Time
+}
+
 // SelfInfo describes the radio node the bot is running as.
 type SelfInfo struct {
 	PublicKey string // 64 hex chars
@@ -49,6 +59,10 @@ type Transport interface {
 	Messages() <-chan Message
 	// Adverts returns node pubkey prefixes as adverts are heard on the mesh.
 	Adverts() <-chan string
+	// ChannelMessages returns messages heard on shared channels.
+	ChannelMessages() <-chan ChannelMessage
+	// SendChannel posts a message to a channel slot on the radio.
+	SendChannel(ctx context.Context, channel int, text string) error
 	// Send delivers a direct message to the node with the given public-key
 	// prefix (12 hex chars). Blocks until the radio accepts (or rejects) it.
 	Send(ctx context.Context, to string, text string) error

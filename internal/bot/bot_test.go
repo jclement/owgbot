@@ -152,6 +152,71 @@ func TestStickySessionRouting(t *testing.T) {
 	}
 }
 
+func newChannelBot(t *testing.T) *fake.Transport {
+	t.Helper()
+	c := config.Default()
+	c.DataDir = t.TempDir()
+	c.SendIntervalMS = 1
+	c.WatchChannels = []int{0}
+	cfg := config.Static(c)
+	st, err := store.Open(c.DataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	tr := fake.New()
+	b, err := bot.New(tr, cfg, st, testLogger(t), ver.New())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go b.Run(ctx)
+	return tr
+}
+
+func TestChannelTriggerReplies(t *testing.T) {
+	tr := newChannelBot(t)
+
+	tr.InjectChannel(0, "Alice: @owgbot how do I use you?")
+	select {
+	case m := <-tr.ChannelOutbound():
+		if m.Channel != 0 || !strings.Contains(m.Text, "DM me /help") {
+			t.Fatalf("reply: %+v", m)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("no channel reply")
+	}
+	// The mention also freshens the advert (startup advert + this one).
+	deadline := time.Now().Add(2 * time.Second)
+	for tr.AdvertsSent() < 1 && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if tr.AdvertsSent() < 1 {
+		t.Fatal("expected an advert after channel trigger")
+	}
+
+	// Cooldown: an immediate second trigger stays silent.
+	tr.InjectChannel(0, "Bob: cmd")
+	select {
+	case m := <-tr.ChannelOutbound():
+		t.Fatalf("cooldown violated: %+v", m)
+	case <-time.After(300 * time.Millisecond):
+	}
+}
+
+func TestChannelIgnoresUnwatchedAndUntriggered(t *testing.T) {
+	tr := newChannelBot(t)
+	tr.InjectChannel(3, "@owgbot hello")          // unwatched slot
+	tr.InjectChannel(0, "nice weather today")     // no trigger
+	tr.InjectChannel(0, "commander keen was rad") // "cmd" only as exact word
+	select {
+	case m := <-tr.ChannelOutbound():
+		t.Fatalf("should be silent: %+v", m)
+	case <-time.After(400 * time.Millisecond):
+	}
+}
+
 func TestInboundDedup(t *testing.T) {
 	tr, _ := newTestBot(t)
 	user := "aabbccddeeff"

@@ -20,6 +20,13 @@ advert_interval: "24h"
 # (Go duration; "0" disables). Installing still takes an explicit /update.
 update_check: "6h"
 
+# Channel slots (0-7, as configured on the radio) where the bot answers
+# "@owgbot" or "cmd" with a one-liner pointing people to DM it, and
+# freshens its advert so they can add it. It does nothing else on
+# channels — no commands, rate-limited to one reply per 5 minutes.
+watch_channels: []
+#  - 0   # slot 0 is usually the Public channel
+
 # Node public-key prefixes (12 hex chars) allowed to run admin commands
 # (/update, /plugins). Find yours by DMing the bot and checking the journal:
 #   journalctl -u owgbot | grep message

@@ -18,10 +18,18 @@ type Sent struct {
 
 // Transport is a fake radio. Inject inbound messages with Inject; observe
 // outbound messages on Outbound.
+// ChannelSent is one outbound channel post captured by the fake radio.
+type ChannelSent struct {
+	Channel int
+	Text    string
+}
+
 type Transport struct {
-	msgs     chan transport.Message
-	adverts  chan string
-	outbound chan Sent
+	msgs      chan transport.Message
+	chmsgs    chan transport.ChannelMessage
+	adverts   chan string
+	outbound  chan Sent
+	chansends chan ChannelSent
 
 	mu          sync.Mutex
 	closed      bool
@@ -31,10 +39,12 @@ type Transport struct {
 
 func New() *Transport {
 	return &Transport{
-		msgs:     make(chan transport.Message, 32),
-		adverts:  make(chan string, 32),
-		outbound: make(chan Sent, 128),
-		names:    make(map[string]string),
+		msgs:      make(chan transport.Message, 32),
+		chmsgs:    make(chan transport.ChannelMessage, 32),
+		adverts:   make(chan string, 32),
+		outbound:  make(chan Sent, 128),
+		chansends: make(chan ChannelSent, 32),
+		names:     make(map[string]string),
 	}
 }
 
@@ -66,6 +76,26 @@ func (t *Transport) Close() error {
 }
 
 func (t *Transport) Adverts() <-chan string { return t.adverts }
+
+func (t *Transport) ChannelMessages() <-chan transport.ChannelMessage { return t.chmsgs }
+
+func (t *Transport) SendChannel(ctx context.Context, channel int, text string) error {
+	t.chansends <- ChannelSent{Channel: channel, Text: text}
+	return nil
+}
+
+// ChannelOutbound exposes the bot's channel posts (tests).
+func (t *Transport) ChannelOutbound() <-chan ChannelSent { return t.chansends }
+
+// InjectChannel simulates a message heard on a channel.
+func (t *Transport) InjectChannel(channel int, text string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.closed {
+		return
+	}
+	t.chmsgs <- transport.ChannelMessage{Channel: channel, Text: text, SNR: -4, Time: time.Now()}
+}
 
 // SendAdvert records that a self-advert was broadcast (tests).
 func (t *Transport) SendAdvert(ctx context.Context, flood bool) error {

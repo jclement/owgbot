@@ -13,6 +13,7 @@ import (
 const (
 	cmdAppStart        = 0x01
 	cmdSendTxtMsg      = 0x02
+	cmdSendChannelMsg  = 0x03
 	cmdGetContacts     = 0x04
 	cmdSetDeviceTime   = 0x06
 	cmdSendSelfAdvert  = 0x07
@@ -112,6 +113,58 @@ func parseContact(f []byte) (prefix, name string, err error) {
 	prefix = hex.EncodeToString(f[1:7])
 	name = strings.TrimRight(string(f[100:132]), "\x00")
 	return prefix, name, nil
+}
+
+// buildSendChannelMsg builds CMD_SEND_CHANNEL_TXT_MSG:
+// [0x03][txt_type][channel_idx][timestamp u32 LE][text].
+func buildSendChannelMsg(channel byte, text string, t time.Time) []byte {
+	f := make([]byte, 7, 7+len(text))
+	f[0] = cmdSendChannelMsg
+	f[1] = 0 // txt_type: plain
+	f[2] = channel
+	binary.LittleEndian.PutUint32(f[3:], uint32(t.Unix()))
+	return append(f, text...)
+}
+
+// channelMsg is a parsed channel message frame.
+type channelMsg struct {
+	channel   int
+	text      string
+	snr       float64
+	timestamp time.Time
+}
+
+// parseChannelMsg parses RESP_CODE_CHANNEL_MSG_RECV (0x08):
+//
+//	[0x08][channel][path_len][txt_type][timestamp u32][text...]
+//
+// and the V3 variant (0x11):
+//
+//	[0x11][snr i8*4][2 reserved][channel][path_len][txt_type][timestamp u32][text...]
+func parseChannelMsg(f []byte) (channelMsg, error) {
+	var m channelMsg
+	var off int
+	switch f[0] {
+	case respChannelMsgRecv:
+		off = 1
+	case respChannelMsgV3:
+		if len(f) < 4 {
+			return m, fmt.Errorf("meshcore: short v3 channel frame")
+		}
+		m.snr = float64(int8(f[1])) / 4.0
+		off = 4
+	default:
+		return m, fmt.Errorf("meshcore: not a channel msg frame (code 0x%02x)", f[0])
+	}
+	if len(f) < off+7 {
+		return m, fmt.Errorf("meshcore: short channel msg frame (%d bytes)", len(f))
+	}
+	m.channel = int(f[off])
+	m.timestamp = time.Unix(int64(binary.LittleEndian.Uint32(f[off+3:])), 0)
+	if len(f) > off+7 {
+		m.text = string(f[off+7:])
+	}
+	return m, nil
 }
 
 // buildSendSelfAdvert builds CMD_SEND_SELF_ADVERT: [0x07][type] (1 = flood).

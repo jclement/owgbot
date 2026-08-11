@@ -37,6 +37,7 @@ type Bot struct {
 	limiter  *rateLimiter
 	out      chan outMsg
 	seen     map[string]time.Time // inbound dedup: sender|timestamp|text → first seen
+	chanLast map[int]time.Time    // per-channel reply cooldown
 	cancel   context.CancelFunc
 	doneCh   chan struct{}
 }
@@ -59,6 +60,7 @@ func New(tr transport.Transport, cfg *config.Provider, st *store.Store, log *slo
 		limiter:  newRateLimiter(),
 		out:      make(chan outMsg, 256),
 		seen:     make(map[string]time.Time),
+		chanLast: make(map[int]time.Time),
 		doneCh:   make(chan struct{}),
 	}
 	for _, p := range plugins {
@@ -128,8 +130,74 @@ func (b *Bot) Run(ctx context.Context) error {
 					ah.HandleAdvert(prefix)
 				}
 			}
+		case cm := <-b.tr.ChannelMessages():
+			b.handleChannel(ctx, cm)
 		}
 	}
+}
+
+const (
+	// channelCooldown limits how often the bot speaks on any one channel —
+	// a channel is the whole mesh's airtime, so once per window, period.
+	channelCooldown = 5 * time.Minute
+	// advertStaleAfter: a channel mention freshens our advert if the last
+	// one is older than this, so the asker can actually add us.
+	advertStaleAfter = 15 * time.Minute
+
+	channelReply = "owgbot here — I work via DM. Send a flood advert so my radio learns your key, then DM me /help. My advert is on the way."
+)
+
+// handleChannel answers "@owgbot" / "cmd" on watched channels with a terse
+// pointer to DM the bot. Channels carry no sender identity, so this is
+// deliberately the ONLY thing the bot does on them.
+func (b *Bot) handleChannel(ctx context.Context, cm transport.ChannelMessage) {
+	cfg := b.cfg.Get()
+	watched := false
+	for _, ch := range cfg.WatchChannels {
+		if ch == cm.Channel {
+			watched = true
+			break
+		}
+	}
+	if !watched || !isChannelTrigger(cm.Text) {
+		return
+	}
+	if last, ok := b.chanLast[cm.Channel]; ok && time.Since(last) < channelCooldown {
+		b.log.Debug("channel trigger ignored (cooldown)", "channel", cm.Channel)
+		return
+	}
+	b.chanLast[cm.Channel] = time.Now()
+	b.log.Info("channel trigger", "channel", cm.Channel, "text", cm.Text)
+
+	sctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	if err := b.tr.SendChannel(sctx, cm.Channel, channelReply); err != nil {
+		b.log.Warn("channel reply failed", "err", err)
+		return
+	}
+	// Freshen the advert so "add OWGBot" is actually possible right now.
+	if v, err := b.sticky.Get("", "last_advert"); err == nil {
+		if ts, perr := strconv.ParseInt(v, 10, 64); perr == nil && time.Since(time.Unix(ts, 0)) < advertStaleAfter {
+			return
+		}
+	}
+	if err := b.SendAdvertNow(ctx); err != nil {
+		b.log.Warn("channel-triggered advert failed", "err", err)
+	}
+}
+
+// isChannelTrigger reports whether a channel message is addressed to the
+// bot: "@owgbot" anywhere, or the message (after the "Name: " prefix
+// clients prepend) being exactly "cmd".
+func isChannelTrigger(text string) bool {
+	t := strings.ToLower(strings.TrimSpace(text))
+	if strings.Contains(t, "@owgbot") {
+		return true
+	}
+	if i := strings.Index(t, ": "); i >= 0 && i < 40 {
+		t = strings.TrimSpace(t[i+2:])
+	}
+	return t == "cmd"
 }
 
 // Flush waits (bounded) for the outbound queue to drain — used before
