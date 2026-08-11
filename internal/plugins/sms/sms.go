@@ -41,18 +41,57 @@ type queued struct {
 }
 
 type Plugin struct {
-	env  plugin.Env
-	api  *voipms
-	stop chan struct{}
-	once sync.Once
+	env   plugin.Env
+	api   *voipms
+	ipURL string
+	stop  chan struct{}
+	once  sync.Once
+
+	ipMu     sync.Mutex
+	cachedIP string
+	ipAt     time.Time
 }
 
 // New builds the plugin. baseURL overrides the voip.ms endpoint (tests).
 func New(baseURL string) *Plugin {
 	return &Plugin{
-		api:  newVoipms(baseURL, &http.Client{Timeout: 20 * time.Second}),
-		stop: make(chan struct{}),
+		api:   newVoipms(baseURL, &http.Client{Timeout: 20 * time.Second}),
+		ipURL: "https://api4.ipify.org", // A-record only: always answers with the IPv4
+		stop:  make(chan struct{}),
 	}
+}
+
+// publicIP reports the bot's public IPv4 — the address voip.ms sees and the
+// one the user must whitelist. Cached for an hour; "" when undeterminable.
+func (p *Plugin) publicIP() string {
+	p.ipMu.Lock()
+	defer p.ipMu.Unlock()
+	if p.cachedIP != "" && time.Since(p.ipAt) < time.Hour {
+		return p.cachedIP
+	}
+	resp, err := p.api.client.Get(p.ipURL)
+	if err != nil {
+		return p.cachedIP
+	}
+	defer resp.Body.Close()
+	buf := make([]byte, 64)
+	n, _ := resp.Body.Read(buf)
+	ip := strings.TrimSpace(string(buf[:n]))
+	if ip != "" {
+		p.cachedIP, p.ipAt = ip, time.Now()
+	}
+	return p.cachedIP
+}
+
+// ipHint renders whitelist guidance when the error is the IP allowlist.
+func (p *Plugin) ipHint(errText string) string {
+	if !strings.Contains(errText, "ip_not_enabled") {
+		return ""
+	}
+	if ip := p.publicIP(); ip != "" {
+		return " — whitelist my IP " + ip + " at voip.ms/m/api.php"
+	}
+	return " — my IP needs whitelisting at voip.ms/m/api.php"
 }
 
 func (p *Plugin) Name() string { return "sms" }
@@ -120,7 +159,11 @@ func (p *Plugin) init(ctx *plugin.Ctx, fields []string) error {
 	// message so history doesn't dump onto the mesh.
 	msgs, err := p.api.fetch(c)
 	if err != nil {
-		ctx.Reply("voip.ms rejected that: " + err.Error() + " (API enabled? IP whitelisted?)")
+		if hint := p.ipHint(err.Error()); hint != "" {
+			ctx.Reply("voip.ms rejected that: " + err.Error() + hint)
+			return nil
+		}
+		ctx.Reply("voip.ms rejected that: " + err.Error() + " (API enabled? password right?)")
 		return nil
 	}
 	var max int64
@@ -165,7 +208,7 @@ func (p *Plugin) send(ctx *plugin.Ctx, to, message string) error {
 		return nil
 	}
 	if err := p.api.send(c, dst, message); err != nil {
-		ctx.Reply("send failed: " + err.Error())
+		ctx.Reply("send failed: " + err.Error() + p.ipHint(err.Error()))
 		return nil
 	}
 	p.env.KV.Set(ctx.User, "sent:"+day, strconv.Itoa(sent+1))
@@ -195,7 +238,12 @@ func (p *Plugin) check(ctx *plugin.Ctx) error {
 func (p *Plugin) status(ctx *plugin.Ctx) error {
 	c, ok := p.creds(ctx.User)
 	if !ok {
-		ctx.Reply("SMS via your own voip.ms account. /sms init <did> <api-user> <api-pass>")
+		reply := "SMS via your own voip.ms account. /sms init <did> <api-user> <api-pass>. " +
+			"Setup at voip.ms/m/api.php: enable API, set an API password"
+		if ip := p.publicIP(); ip != "" {
+			reply += ", whitelist my IP " + ip
+		}
+		ctx.Reply(reply)
 		return nil
 	}
 	ctx.Reply(fmt.Sprintf("connected as %s · %d/%d sent today · /sms <num> <msg>, check, off",
@@ -224,9 +272,37 @@ func (p *Plugin) pollLoop() {
 			}
 			if _, err := p.pollUser(e.User, c); err != nil {
 				p.env.Log.Debug("sms poll failed", "user", e.User, "err", err)
+				p.notifyAuthFailure(e.User, err)
+			} else {
+				// Working again: re-arm the warning.
+				p.env.KV.Delete(e.User, "auth_warned")
 			}
 		}
 	}
+}
+
+// notifyAuthFailure proactively DMs a user when their voip.ms credentials
+// stop working in the background — the classic case being a changed home IP
+// falling off the whitelist. At most one warning per 24h.
+func (p *Plugin) notifyAuthFailure(user string, err error) {
+	text := err.Error()
+	if !strings.Contains(text, "ip_not_enabled") && !strings.Contains(text, "invalid_credentials") {
+		return // transient/network errors aren't worth a DM
+	}
+	if v, kerr := p.env.KV.Get(user, "auth_warned"); kerr == nil {
+		if ts, perr := strconv.ParseInt(v, 10, 64); perr == nil && time.Since(time.Unix(ts, 0)) < 24*time.Hour {
+			return
+		}
+	}
+	msg := "heads up: voip.ms is rejecting me (" + text + ")"
+	if hint := p.ipHint(text); hint != "" {
+		msg += hint
+	} else {
+		msg += " — check your API settings at voip.ms/m/api.php"
+	}
+	p.env.SendTo(user, msg)
+	p.env.KV.Set(user, "auth_warned", strconv.FormatInt(time.Now().Unix(), 10))
+	p.env.Log.Info("sms auth failure notified", "user", user)
 }
 
 // pollUser fetches messages newer than the user's watermark and queues them.

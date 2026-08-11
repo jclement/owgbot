@@ -41,6 +41,8 @@ func (f *fakeVoipms) handler(w http.ResponseWriter, r *http.Request) {
 		}
 		f.sent = append(f.sent, r.URL.Query().Get("dst")+"|"+r.URL.Query().Get("message"))
 		fmt.Fprint(w, `{"status":"success","sms":99}`)
+	default:
+		fmt.Fprint(w, "203.0.113.7") // the ipify stand-in
 	}
 }
 
@@ -62,6 +64,7 @@ func newTestSMS(t *testing.T) (*Plugin, *fakeVoipms, *[]string) {
 
 	var dms []string
 	p := New(srv.URL)
+	p.ipURL = srv.URL // no method param → fake answers with an IP
 	p.env = plugin.Env{
 		KV:     st.Namespace("sms"),
 		Log:    slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -157,6 +160,28 @@ func TestSendFailureSurfaces(t *testing.T) {
 	p.HandleCommand(newCtx(user, &out), "sms", "4035559999 hello")
 	if !strings.Contains(out[0], "invalid_credentials") {
 		t.Fatalf("error surfacing: %q", out[0])
+	}
+}
+
+func TestAuthFailureNotifiesOnceWithIP(t *testing.T) {
+	p, fake, dms := newTestSMS(t)
+	setup(t, p, fake)
+
+	err := fmt.Errorf("voip.ms: ip_not_enabled")
+	p.notifyAuthFailure(user, err)
+	if len(*dms) != 1 || !strings.Contains((*dms)[0], "203.0.113.7") || !strings.Contains((*dms)[0], "whitelist") {
+		t.Fatalf("warning: %v", *dms)
+	}
+	// Throttled: no second DM within 24h.
+	p.notifyAuthFailure(user, err)
+	if len(*dms) != 1 {
+		t.Fatalf("should warn once: %v", *dms)
+	}
+	// Transient errors never DM.
+	p.env.KV.Delete(user, "auth_warned")
+	p.notifyAuthFailure(user, fmt.Errorf("voip.ms unreachable: timeout"))
+	if len(*dms) != 1 {
+		t.Fatalf("transient error must not warn: %v", *dms)
 	}
 }
 
