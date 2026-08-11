@@ -322,6 +322,36 @@ func (b *Bot) handleBare(pctx *plugin.Ctx, text string) {
 	pctx.Reply("hi! I'm owgbot — try /help")
 }
 
+// RunCommand dispatches a slash command on behalf of user and returns the
+// reply text instead of sending it — the ai plugin's tool-calling hook.
+// Session stickiness is untouched and admin commands stay admin-gated.
+func (b *Bot) RunCommand(ctx context.Context, user string, admin bool, text string) string {
+	name, args, _ := strings.Cut(strings.TrimPrefix(strings.TrimSpace(text), "/"), " ")
+	name = strings.ToLower(name)
+	p, ok := b.commands[name]
+	if ok && findCommand(p, name).Admin && !admin {
+		ok = false
+	}
+	if !ok {
+		return "unknown command"
+	}
+	var buf []string
+	pctx := &plugin.Ctx{
+		Context: ctx,
+		User:    user,
+		Admin:   admin,
+		Reply:   func(t string) { buf = append(buf, t) },
+		Config:  b.cfg.Get(),
+	}
+	if err := p.HandleCommand(pctx, name, strings.TrimSpace(args)); err != nil {
+		return "error: " + err.Error()
+	}
+	if len(buf) == 0 {
+		return "(no output)"
+	}
+	return strings.Join(buf, "\n")
+}
+
 func findCommand(p plugin.Plugin, name string) plugin.Command {
 	for _, c := range p.Commands() {
 		if c.Name == name {

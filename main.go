@@ -317,7 +317,10 @@ func runBot(cfg *config.Provider, tr transport.Transport, ui func(*bot.Bot, cont
 	// The LLM-backed plugins only exist when a key is configured (config
 	// setting beats environment).
 	if key := cfg.Get().Setting("ai", "api_key", os.Getenv("OPENAI_API_KEY")); key != "" {
-		plugins = append(plugins, ai.New(key), zork.New(key))
+		runCmd := func(ctx context.Context, user string, admin bool, command string) string {
+			return b.RunCommand(ctx, user, admin, command)
+		}
+		plugins = append(plugins, ai.New(key, runCmd), zork.New(key))
 	}
 	plugins = append(plugins, admin.New(pluginList, restart,
 		func(ctx context.Context) error { return b.SendAdvertNow(ctx) }))

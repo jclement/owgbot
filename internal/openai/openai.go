@@ -15,6 +15,32 @@ import (
 type Message struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
+	// ToolCalls is set on assistant messages that invoke tools.
+	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
+	// ToolCallID links a role:"tool" result message to its call.
+	ToolCallID string `json:"tool_call_id,omitempty"`
+}
+
+// ToolCall is one function invocation requested by the model.
+type ToolCall struct {
+	ID       string `json:"id"`
+	Type     string `json:"type"`
+	Function struct {
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"`
+	} `json:"function"`
+}
+
+// Tool declares a function the model may call.
+type Tool struct {
+	Type     string       `json:"type"`
+	Function ToolFunction `json:"function"`
+}
+
+type ToolFunction struct {
+	Name        string         `json:"name"`
+	Description string         `json:"description"`
+	Parameters  map[string]any `json:"parameters"`
 }
 
 // Client talks to the OpenAI chat-completions API.
@@ -32,12 +58,30 @@ func New(key string) *Client {
 	}
 }
 
-// Chat runs one completion. gpt-5-family models get minimal reasoning effort
-// — these plugins want fast, cheap, terse replies, not deliberation.
+// Chat runs one completion and returns the reply text.
 func (c *Client) Chat(model string, messages []Message) (string, error) {
+	m, err := c.ChatTools(model, messages, nil)
+	if err != nil {
+		return "", err
+	}
+	reply := strings.TrimSpace(m.Content)
+	if reply == "" {
+		return "", fmt.Errorf("openai: empty content")
+	}
+	return reply, nil
+}
+
+// ChatTools runs one completion with optional tool definitions and returns
+// the full assistant message (which may carry tool calls instead of text).
+// gpt-5-family models get minimal reasoning effort — these plugins want
+// fast, cheap, terse replies, not deliberation.
+func (c *Client) ChatTools(model string, messages []Message, tools []Tool) (Message, error) {
 	payload := map[string]any{
 		"model":    model,
 		"messages": messages,
+	}
+	if len(tools) > 0 {
+		payload["tools"] = tools
 	}
 	if strings.HasPrefix(model, "gpt-5") {
 		payload["reasoning_effort"] = "minimal"
@@ -50,38 +94,32 @@ func (c *Client) Chat(model string, messages []Message) (string, error) {
 	}
 	req, err := http.NewRequest("POST", base+"/v1/chat/completions", bytes.NewReader(body))
 	if err != nil {
-		return "", err
+		return Message{}, err
 	}
 	req.Header.Set("Authorization", "Bearer "+c.Key)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
-		return "", err
+		return Message{}, err
 	}
 	defer resp.Body.Close()
 	var out struct {
 		Choices []struct {
-			Message struct {
-				Content string `json:"content"`
-			} `json:"message"`
+			Message Message `json:"message"`
 		} `json:"choices"`
 		Error *struct {
 			Message string `json:"message"`
 		} `json:"error"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return "", err
+		return Message{}, err
 	}
 	if out.Error != nil {
-		return "", fmt.Errorf("openai: %s", out.Error.Message)
+		return Message{}, fmt.Errorf("openai: %s", out.Error.Message)
 	}
 	if len(out.Choices) == 0 {
-		return "", fmt.Errorf("openai: empty response")
+		return Message{}, fmt.Errorf("openai: empty response")
 	}
-	reply := strings.TrimSpace(out.Choices[0].Message.Content)
-	if reply == "" {
-		return "", fmt.Errorf("openai: empty content")
-	}
-	return reply, nil
+	return out.Choices[0].Message, nil
 }
