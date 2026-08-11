@@ -111,9 +111,27 @@ func (p *Plugin) Init(env plugin.Env) error {
 
 func (p *Plugin) Stop() { p.once.Do(func() { close(p.stop) }) }
 
-// Queued texts ride the same delivery triggers as /mail.
-func (p *Plugin) HandleActivity(user string) { p.deliver(user) }
-func (p *Plugin) HandleAdvert(user string)   { p.deliver(user) }
+// recentWindow: a user heard this recently is presumed still reachable, so
+// freshly polled texts push immediately instead of waiting to be spoken to.
+const recentWindow = 15 * time.Minute
+
+// Queued texts ride the same delivery triggers as /mail — and both triggers
+// refresh the user's last-heard time for the push-when-recent path.
+func (p *Plugin) HandleActivity(user string) { p.markHeard(user); p.deliver(user) }
+func (p *Plugin) HandleAdvert(user string)   { p.markHeard(user); p.deliver(user) }
+
+func (p *Plugin) markHeard(user string) {
+	p.env.KV.Set(user, "heard", strconv.FormatInt(time.Now().Unix(), 10))
+}
+
+func (p *Plugin) heardRecently(user string) bool {
+	v, err := p.env.KV.Get(user, "heard")
+	if err != nil {
+		return false
+	}
+	ts, err := strconv.ParseInt(v, 10, 64)
+	return err == nil && time.Since(time.Unix(ts, 0)) < recentWindow
+}
 
 func (p *Plugin) HandleCommand(ctx *plugin.Ctx, cmd, args string) error {
 	fields := strings.Fields(args)
@@ -270,12 +288,18 @@ func (p *Plugin) pollLoop() {
 			if json.Unmarshal([]byte(e.Value), &c) != nil {
 				continue
 			}
-			if _, err := p.pollUser(e.User, c); err != nil {
+			n, err := p.pollUser(e.User, c)
+			if err != nil {
 				p.env.Log.Debug("sms poll failed", "user", e.User, "err", err)
 				p.notifyAuthFailure(e.User, err)
-			} else {
-				// Working again: re-arm the warning.
-				p.env.KV.Delete(e.User, "auth_warned")
+				continue
+			}
+			// Working again: re-arm the warning.
+			p.env.KV.Delete(e.User, "auth_warned")
+			// Recently-heard users get their texts pushed right away;
+			// everyone else waits for the next activity/advert.
+			if n > 0 && p.heardRecently(e.User) {
+				p.deliver(e.User)
 			}
 		}
 	}

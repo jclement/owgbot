@@ -185,6 +185,30 @@ func TestAuthFailureNotifiesOnceWithIP(t *testing.T) {
 	}
 }
 
+func TestRecentUserGetsPushDelivery(t *testing.T) {
+	p, fake, dms := newTestSMS(t)
+	setup(t, p, fake)
+
+	// The user was just heard (e.g. they ran /sms init a minute ago).
+	p.markHeard(user)
+
+	fake.mu.Lock()
+	fake.inbox = append(fake.inbox, smsItem(102, "5875552222", "push me"))
+	fake.mu.Unlock()
+
+	c, _ := p.creds(user)
+	n, err := p.pollUser(user, c)
+	if err != nil || n != 1 {
+		t.Fatalf("poll: %d, %v", n, err)
+	}
+	if p.heardRecently(user) {
+		p.deliver(user)
+	}
+	if len(*dms) != 1 || !strings.Contains((*dms)[0], "push me") {
+		t.Fatalf("recent user should get immediate delivery: %v", *dms)
+	}
+}
+
 func TestOffForgetsEverything(t *testing.T) {
 	p, fake, _ := newTestSMS(t)
 	setup(t, p, fake)
