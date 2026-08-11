@@ -205,14 +205,17 @@ func TestRateLimitNotice(t *testing.T) {
 	t.Cleanup(cancel)
 	go b.Run(ctx)
 
-	tr.Inject("aabbccddeeff", "/ver")
+	// Distinct timestamps: same-second identical messages are treated as
+	// client retries by the dedup layer.
+	ts := time.Now()
+	tr.InjectAt("aabbccddeeff", "/ver", ts)
 	recv(t, tr) // consumes the single token
-	tr.Inject("aabbccddeeff", "/ver")
+	tr.InjectAt("aabbccddeeff", "/ver", ts.Add(time.Second))
 	if m := recv(t, tr); !strings.Contains(m.Text, "rate limited") {
 		t.Fatalf("expected rate limit notice, got %q", m.Text)
 	}
 	// Third message: silently dropped.
-	tr.Inject("aabbccddeeff", "/ver")
+	tr.InjectAt("aabbccddeeff", "/ver", ts.Add(2*time.Second))
 	select {
 	case m := <-tr.Outbound():
 		t.Fatalf("expected silence, got %q", m.Text)
