@@ -6,7 +6,9 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"time"
 
 	"github.com/jclement/owgbot/internal/transport/meshcore"
@@ -55,8 +57,12 @@ func cmdDoctor(args []string) error {
 	port, portErr := resolvePort(o, c)
 	check("serial", portErr, port)
 
-	// Radio handshake (only if we have a port).
-	if portErr == nil {
+	// Radio handshake (only if we have a port). If the owgbot service is
+	// running it owns the port — serial isn't exclusive on Linux, so probing
+	// it would just steal frames from the service and time out.
+	if portErr == nil && serviceActive() {
+		fmt.Printf("  · %-8s owgbot service is running and holds the port — see journalctl -u owgbot\n", "radio")
+	} else if portErr == nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		tr := meshcore.New(port, c.Baud, quiet)
 		radioErr := tr.Start(ctx)
@@ -88,4 +94,12 @@ func cmdDoctor(args []string) error {
 	}
 	fmt.Println("all good")
 	return nil
+}
+
+// serviceActive reports whether the owgbot systemd service is running.
+func serviceActive() bool {
+	if runtime.GOOS != "linux" {
+		return false
+	}
+	return exec.Command("systemctl", "is-active", "--quiet", "owgbot").Run() == nil
 }
