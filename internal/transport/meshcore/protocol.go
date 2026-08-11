@@ -180,8 +180,11 @@ func parseContactMsg(f []byte) (contactMsg, error) {
 		return m, fmt.Errorf("meshcore: short contact msg frame (%d bytes)", len(f))
 	}
 	m.fromPrefix = append([]byte(nil), f[off:off+6]...)
+	// Receive-side path_len semantics: 0xFF = direct (no path recorded);
+	// otherwise the packet was flooded and path_len repeater hops were
+	// recorded on the way here.
 	if pathLen := f[off+6]; pathLen == 0xFF {
-		m.hops = -1 // unknown / flood
+		m.hops = 0
 	} else {
 		m.hops = int(pathLen)
 	}

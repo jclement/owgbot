@@ -48,7 +48,7 @@ type Ctx struct {
 	// didn't report one). Note it describes the final hop into the bot —
 	// meaningful for your own link only when Hops == 0.
 	SNR float64
-	// Hops is how many hops the message travelled (0 = direct, -1 unknown).
+	// Hops is how many repeater hops the message travelled (0 = direct).
 	Hops int
 	// Reply queues a reply to the sender. Long text is chunked and paced
 	// automatically; keep replies terse anyway — every chunk is airtime.

@@ -22,8 +22,7 @@ type Message struct {
 	// It describes the FINAL hop into the bot's radio — for a repeated
 	// message that's the last repeater's link, not the sender's.
 	SNR float64
-	// Hops is the route length the message travelled (0 = direct,
-	// -1 = unknown).
+	// Hops is how many repeater hops the message travelled (0 = direct).
 	Hops int
 	// Time is the sender's timestamp.
 	Time time.Time

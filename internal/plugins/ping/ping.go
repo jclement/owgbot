@@ -46,14 +46,10 @@ func (p *Plugin) HandleSession(ctx *plugin.Ctx, text string) (bool, error) {
 // report renders SNR + route. SNR is measured on the final hop into the bot,
 // so for repeated messages it's labeled as the last hop's, not yours.
 func report(ctx *plugin.Ctx) string {
-	switch {
-	case ctx.Hops == 0:
-		return snr(ctx.SNR) + " direct"
-	case ctx.Hops > 0:
+	if ctx.Hops > 0 {
 		return fmt.Sprintf("via %d hop(s), last hop %s", ctx.Hops, snr(ctx.SNR))
-	default:
-		return snr(ctx.SNR) + " (route unknown)"
 	}
+	return snr(ctx.SNR) + " direct"
 }
 
 func isOff(s string) bool {

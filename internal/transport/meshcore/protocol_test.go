@@ -90,7 +90,7 @@ func TestParseContactMsgV1(t *testing.T) {
 func TestParseContactMsgV3WithSNR(t *testing.T) {
 	f := []byte{respContactMsgV3, 0xF8, 0, 0} // SNR -8/4 = -2dB
 	f = append(f, 9, 8, 7, 6, 5, 4)           // prefix
-	f = append(f, 2)                          // path_len
+	f = append(f, 2)                          // path_len: flooded, 2 hops
 	f = append(f, 0)                          // txt_type
 	ts := make([]byte, 4)
 	binary.LittleEndian.PutUint32(ts, 1700000001)
@@ -104,8 +104,31 @@ func TestParseContactMsgV3WithSNR(t *testing.T) {
 	if m.snr != -2.0 {
 		t.Fatalf("snr %v", m.snr)
 	}
+	if m.hops != 2 {
+		t.Fatalf("hops %d", m.hops)
+	}
 	if m.text != "/w yyc" {
 		t.Fatalf("text %q", m.text)
+	}
+}
+
+// Receive-side path_len 0xFF means the message arrived DIRECT.
+func TestParseContactMsgDirectPath(t *testing.T) {
+	f := []byte{respContactMsgV3, 0x10, 0, 0} // SNR +4dB
+	f = append(f, 1, 2, 3, 4, 5, 6)
+	f = append(f, 0xFF) // direct
+	f = append(f, 0)
+	ts := make([]byte, 4)
+	binary.LittleEndian.PutUint32(ts, 1700000002)
+	f = append(f, ts...)
+	f = append(f, []byte("/ping")...)
+
+	m, err := parseContactMsg(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.hops != 0 {
+		t.Fatalf("0xFF path must mean direct (0 hops), got %d", m.hops)
 	}
 }
 
