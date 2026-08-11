@@ -19,17 +19,25 @@ import (
 // Plugin needs hooks back into the app: the plugin roster for /plugins, a
 // restart trigger for /update (flush outbound then exit; systemd restarts),
 // and an advert trigger for /advert.
+// ChannelWatcher manages the channel watch list (implemented by the bot).
+type ChannelWatcher interface {
+	WatchedChannels() []int
+	Watch(ch int) error
+	Unwatch(ch int) error
+}
+
 type Plugin struct {
 	env     plugin.Env
 	plugins func() []plugin.Plugin
 	restart func()
 	advert  func(ctx context.Context) error
+	watcher func() ChannelWatcher
 	stop    chan struct{}
 	once    sync.Once
 }
 
-func New(plugins func() []plugin.Plugin, restart func(), advert func(ctx context.Context) error) *Plugin {
-	return &Plugin{plugins: plugins, restart: restart, advert: advert, stop: make(chan struct{})}
+func New(plugins func() []plugin.Plugin, restart func(), advert func(ctx context.Context) error, watcher func() ChannelWatcher) *Plugin {
+	return &Plugin{plugins: plugins, restart: restart, advert: advert, watcher: watcher, stop: make(chan struct{})}
 }
 
 func (p *Plugin) Name() string { return "admin" }
@@ -39,6 +47,7 @@ func (p *Plugin) Commands() []plugin.Command {
 		{Name: "plugins", Help: "list plugins", Admin: true},
 		{Name: "update", Help: "self-update from github", Admin: true},
 		{Name: "advert", Help: "broadcast a self-advert now", Admin: true},
+		{Name: "watch", Args: "[#ch | -#ch]", Help: "list/watch/unwatch channels", Admin: true},
 	}
 }
 
@@ -131,8 +140,88 @@ func (p *Plugin) HandleCommand(ctx *plugin.Ctx, cmd, args string) error {
 		}
 		ctx.Reply("advert sent")
 		return nil
+	case "watch":
+		return p.watch(ctx, args)
 	}
 	return nil
+}
+
+// watch manages the channel watch list: bare = list, "#name"/"N" = add,
+// "-#name"/"-N" = remove. Names come from the radio's channel slots.
+func (p *Plugin) watch(ctx *plugin.Ctx, args string) error {
+	w := p.watcher()
+	args = strings.TrimSpace(args)
+	if args == "" {
+		ctx.Reply(p.watchList(w))
+		return nil
+	}
+	remove := strings.HasPrefix(args, "-")
+	spec := strings.TrimPrefix(strings.TrimPrefix(args, "-"), "#")
+	slot, ok := p.resolveChannel(spec)
+	if !ok {
+		ctx.Reply("no channel " + args + " — /watch to list slots")
+		return nil
+	}
+	var err error
+	if remove {
+		err = w.Unwatch(slot)
+	} else {
+		err = w.Watch(slot)
+	}
+	if err != nil {
+		return err
+	}
+	ctx.Reply(p.watchList(w))
+	return nil
+}
+
+func (p *Plugin) watchList(w ChannelWatcher) string {
+	watched := make(map[int]bool)
+	for _, ch := range w.WatchedChannels() {
+		watched[ch] = true
+	}
+	var on, off []string
+	for slot := 0; slot < 8; slot++ {
+		name := p.env.ChannelName(slot)
+		if name == "" && !watched[slot] {
+			continue // unconfigured slot
+		}
+		label := fmt.Sprintf("%d", slot)
+		if name != "" {
+			label = fmt.Sprintf("%d #%s", slot, name)
+		}
+		if watched[slot] {
+			on = append(on, label)
+		} else {
+			off = append(off, label)
+		}
+	}
+	s := "watching: "
+	if len(on) == 0 {
+		s += "nothing"
+	} else {
+		s += strings.Join(on, ", ")
+	}
+	if len(off) > 0 {
+		s += "\nother slots: " + strings.Join(off, ", ")
+	}
+	return s
+}
+
+// resolveChannel turns a slot number or channel name into a slot index.
+func (p *Plugin) resolveChannel(spec string) (int, bool) {
+	if n, err := strconv.Atoi(spec); err == nil {
+		if n >= 0 && n <= 7 {
+			return n, true
+		}
+		return 0, false
+	}
+	for slot := 0; slot < 8; slot++ {
+		if name := p.env.ChannelName(slot); name != "" && strings.EqualFold(name, spec) {
+			return slot, true
+		}
+	}
+	return 0, false
 }
 
 func (p *Plugin) update(ctx *plugin.Ctx) error {

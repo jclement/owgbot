@@ -63,6 +63,9 @@ type Transport interface {
 	ChannelMessages() <-chan ChannelMessage
 	// SendChannel posts a message to a channel slot on the radio.
 	SendChannel(ctx context.Context, channel int, text string) error
+	// ChannelName returns the radio's name for a channel slot ("" if the
+	// slot is unconfigured).
+	ChannelName(channel int) string
 	// Send delivers a direct message to the node with the given public-key
 	// prefix (12 hex chars). Blocks until the radio accepts (or rejects) it.
 	Send(ctx context.Context, to string, text string) error

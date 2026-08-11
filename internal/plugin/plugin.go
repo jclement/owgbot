@@ -85,6 +85,9 @@ type Env struct {
 	ResolveNode func(nameOrPrefix string) (string, bool)
 	// Self reports the radio node the bot is running as.
 	Self func() transport.SelfInfo
+	// ChannelName returns the radio's name for a channel slot ("" if
+	// unconfigured).
+	ChannelName func(channel int) string
 }
 
 // Plugin is one bot feature.

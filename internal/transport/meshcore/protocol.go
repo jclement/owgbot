@@ -19,6 +19,7 @@ const (
 	cmdSendSelfAdvert  = 0x07
 	cmdSyncNextMessage = 0x0A
 	cmdDeviceQuery     = 0x16
+	cmdGetChannel      = 0x1F
 
 	respOK             = 0x00
 	respErr            = 0x01
@@ -33,6 +34,7 @@ const (
 	respDeviceInfo     = 0x0D
 	respContactMsgV3   = 0x10
 	respChannelMsgV3   = 0x11
+	respChannelInfo    = 0x12
 
 	pushAdvert        = 0x80
 	pushPathUpdated   = 0x81
@@ -165,6 +167,18 @@ func parseChannelMsg(f []byte) (channelMsg, error) {
 		m.text = string(f[off+7:])
 	}
 	return m, nil
+}
+
+// buildGetChannel builds CMD_GET_CHANNEL: [0x1F][slot].
+func buildGetChannel(slot byte) []byte { return []byte{cmdGetChannel, slot} }
+
+// parseChannelInfo parses RESP_CODE_CHANNEL_INFO (0x12):
+// [0x12][slot][name 32B nul-padded][secret 16B]. The secret is ignored.
+func parseChannelInfo(f []byte) (slot int, name string, err error) {
+	if len(f) < 34 || f[0] != respChannelInfo {
+		return 0, "", fmt.Errorf("meshcore: bad CHANNEL_INFO frame (%d bytes)", len(f))
+	}
+	return int(f[1]), strings.TrimRight(string(f[2:34]), "\x00"), nil
 }
 
 // buildSendSelfAdvert builds CMD_SEND_SELF_ADVERT: [0x07][type] (1 = flood).

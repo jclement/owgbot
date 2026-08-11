@@ -323,7 +323,8 @@ func runBot(cfg *config.Provider, tr transport.Transport, ui func(*bot.Bot, cont
 		plugins = append(plugins, ai.New(key, runCmd), zork.New(key))
 	}
 	plugins = append(plugins, admin.New(pluginList, restart,
-		func(ctx context.Context) error { return b.SendAdvertNow(ctx) }))
+		func(ctx context.Context) error { return b.SendAdvertNow(ctx) },
+		func() admin.ChannelWatcher { return b }))
 
 	b, err = bot.New(tr, cfg, st, log, plugins...)
 	if err != nil {

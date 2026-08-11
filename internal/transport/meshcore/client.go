@@ -44,6 +44,7 @@ type Client struct {
 	done  chan struct{}
 
 	contacts        map[string]string // prefix → advertised name
+	channels        map[int]string    // slot → channel name
 	contactsFetched time.Time
 }
 
@@ -59,6 +60,7 @@ func New(portName string, baud int, log *slog.Logger) *Client {
 		kick:     make(chan struct{}, 1),
 		done:     make(chan struct{}),
 		contacts: make(map[string]string),
+		channels: make(map[int]string),
 	}
 }
 
@@ -219,9 +221,35 @@ func (c *Client) connect(ctx context.Context) error {
 	if err := c.syncContacts(); err != nil {
 		c.log.Warn("contacts sync failed", "err", err)
 	}
+	c.syncChannels(ctx)
 	// Drain anything queued while we were offline.
 	c.kickSync()
 	return nil
+}
+
+// syncChannels reads the names of all 8 channel slots (unconfigured slots
+// error or come back empty — both fine).
+func (c *Client) syncChannels(ctx context.Context) {
+	fresh := make(map[int]string)
+	for slot := 0; slot < 8; slot++ {
+		f, err := c.roundTrip(ctx, buildGetChannel(byte(slot)))
+		if err != nil || len(f) == 0 || f[0] != respChannelInfo {
+			continue
+		}
+		if idx, name, err := parseChannelInfo(f); err == nil && name != "" {
+			fresh[idx] = name
+		}
+	}
+	c.mu.Lock()
+	c.channels = fresh
+	c.mu.Unlock()
+	c.log.Debug("channels synced", "count", len(fresh))
+}
+
+func (c *Client) ChannelName(channel int) string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.channels[channel]
 }
 
 // syncContacts refreshes the prefix→name map from the radio's contact list.

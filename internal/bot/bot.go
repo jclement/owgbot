@@ -5,6 +5,7 @@ package bot
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -76,6 +77,7 @@ func New(tr transport.Transport, cfg *config.Provider, st *store.Store, log *slo
 			NodeName:    tr.NodeName,
 			ResolveNode: tr.ResolveNode,
 			Self:        tr.Self,
+			ChannelName: tr.ChannelName,
 		}
 		if err := p.Init(env); err != nil {
 			return nil, err
@@ -147,13 +149,48 @@ const (
 	channelReply = "owgbot here — I work via DM. Send a flood advert so my radio learns your key, then DM me /help. My advert is on the way."
 )
 
+// WatchedChannels returns the effective channel watch list: the KV-stored
+// list once /watch has ever been used, else the config's watch_channels.
+func (b *Bot) WatchedChannels() []int {
+	if v, err := b.sticky.Get("", "watch"); err == nil {
+		var l []int
+		if json.Unmarshal([]byte(v), &l) == nil {
+			return l
+		}
+	}
+	return b.cfg.Get().WatchChannels
+}
+
+// Watch adds a channel slot to the watch list (persisted).
+func (b *Bot) Watch(ch int) error { return b.setWatch(ch, true) }
+
+// Unwatch removes a channel slot from the watch list (persisted).
+func (b *Bot) Unwatch(ch int) error { return b.setWatch(ch, false) }
+
+func (b *Bot) setWatch(ch int, add bool) error {
+	cur := b.WatchedChannels()
+	next := make([]int, 0, len(cur)+1)
+	for _, c := range cur {
+		if c != ch {
+			next = append(next, c)
+		}
+	}
+	if add {
+		next = append(next, ch)
+	}
+	buf, err := json.Marshal(next)
+	if err != nil {
+		return err
+	}
+	return b.sticky.Set("", "watch", string(buf))
+}
+
 // handleChannel answers "@owgbot" / "cmd" on watched channels with a terse
 // pointer to DM the bot. Channels carry no sender identity, so this is
 // deliberately the ONLY thing the bot does on them.
 func (b *Bot) handleChannel(ctx context.Context, cm transport.ChannelMessage) {
-	cfg := b.cfg.Get()
 	watched := false
-	for _, ch := range cfg.WatchChannels {
+	for _, ch := range b.WatchedChannels() {
 		if ch == cm.Channel {
 			watched = true
 			break

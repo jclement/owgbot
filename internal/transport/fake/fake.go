@@ -34,6 +34,7 @@ type Transport struct {
 	mu          sync.Mutex
 	closed      bool
 	names       map[string]string // prefix → name
+	chanNames   map[int]string    // slot → channel name
 	advertsSent int
 }
 
@@ -45,6 +46,7 @@ func New() *Transport {
 		outbound:  make(chan Sent, 128),
 		chansends: make(chan ChannelSent, 32),
 		names:     make(map[string]string),
+		chanNames: map[int]string{0: "Public"},
 	}
 }
 
@@ -82,6 +84,19 @@ func (t *Transport) ChannelMessages() <-chan transport.ChannelMessage { return t
 func (t *Transport) SendChannel(ctx context.Context, channel int, text string) error {
 	t.chansends <- ChannelSent{Channel: channel, Text: text}
 	return nil
+}
+
+func (t *Transport) ChannelName(channel int) string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.chanNames[channel]
+}
+
+// SetChannelName registers a channel slot name (tests / dev).
+func (t *Transport) SetChannelName(channel int, name string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.chanNames[channel] = name
 }
 
 // ChannelOutbound exposes the bot's channel posts (tests).
